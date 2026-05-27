@@ -5,6 +5,7 @@ build
 # first_assignment
 # mesh
 # smallfvm3.0
+lib
 
 main
 a.out*

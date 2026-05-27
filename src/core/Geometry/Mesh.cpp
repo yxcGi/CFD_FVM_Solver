@@ -1,4 +1,5 @@
 #include "Mesh.h"
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 // #include "BaseField.hpp"

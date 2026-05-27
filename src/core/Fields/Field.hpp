@@ -9,6 +9,7 @@
 #include "CellField.hpp"
 #include "FieldOperators/Gradient.hpp"
 #include <algorithm>
+#include <climits>
 #include <fstream>
 
 

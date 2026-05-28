@@ -6,6 +6,8 @@ build
 # mesh
 # smallfvm3.0
 lib
+*.dat
+.DS_Store
 
 main
 a.out*

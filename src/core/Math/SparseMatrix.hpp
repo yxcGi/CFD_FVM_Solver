@@ -109,7 +109,7 @@ public:
     // 给离散函数设置友元
     friend void fvm::Laplacian<Tp>(SparseMatrix<Tp>& matrix, const FaceField<Scalar>& gamma, Field<Tp>& phi);
 
-    friend void fvm::Div(SparseMatrix<Tp>& matrix, const FaceField<Scalar>& rho, Field<Tp>& phi, FaceField<Vector<Scalar>>& U, fvm::DivType type);
+    friend void fvm::Div<Tp>(SparseMatrix<Tp>& matrix, const FaceField<Scalar>& rho, Field<Tp>& phi, FaceField<Vector<Scalar>>& U, fvm::DivType type);
 
 
 private:
@@ -690,7 +690,7 @@ inline Scalar SparseMatrix<Tp>::at(ULL i, ULL j) const
         }
 
         // 若未找到则返回0
-        return Tp(0);
+        return Scalar(0);
     }
 }
 

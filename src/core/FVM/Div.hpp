@@ -202,7 +202,7 @@ namespace fvm
 
                     // 二阶修正部分
                     matrix.addB(owner, +m_f * 0.5 * phiCellField_0[owner] - m_f * 1.5 * phiCellField_0[neighbor] + m_f * (neighborGrad & CD) + m_f * phiCellField_0[neighbor]);
-                    matrix.addB(neighbor, -m_f * 1.5 * phiCellField_0[neighbor] + m_f * 0.5 * phiCellField_0[owner] - m_f * (neighborGrad & CD) - m_f * phiCellField_0[neighbor]);
+                    matrix.addB(neighbor, +m_f * 1.5 * phiCellField_0[neighbor] - m_f * 0.5 * phiCellField_0[owner] - m_f * (neighborGrad & CD) - m_f * phiCellField_0[neighbor]);
 
                 }
             }

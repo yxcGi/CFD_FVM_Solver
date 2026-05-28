@@ -8,16 +8,77 @@
 #include <cmath>
 #include "Solver.hpp"
 #include "Div.hpp"
+#include "SIMPLE.hpp"
 
 
 using Scalar = double;
-int main()
-{
+int main() {
 
+#if 1
+    // 读取网格
+    Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
+
+    // 定义速度场/压力场
+    Field<Vector<Scalar>> U("U", &mesh);
+    Field<Scalar> p("p", &mesh);
+
+    // 初始化速度场/压力场
+    U.setValue(Vector<Scalar>(0, 0, 0));
+    p.setValue(0.0);
+
+    // 设置边界条件
+    U.setBoundaryCondition("movingWall",
+                           1, 0, Vector<Scalar>(50, 0, 0));
+    U.setBoundaryCondition("leftWalls",
+                           1, 0, Vector<Scalar>(0, 0, 0));
+    U.setBoundaryCondition("bottomWalls",
+                           1, 0, Vector<Scalar>(0, 0, 0));
+    U.setBoundaryCondition("rightWalls",
+                           1, 0, Vector<Scalar>(0, 0, 0));
+
+    p.setBoundaryCondition("movingWall",
+                           0, 1, 0.0);
+    p.setBoundaryCondition("leftWalls",
+                           0, 1, 0.0);
+    p.setBoundaryCondition("bottomWalls",
+                           0, 1, 0.0);
+    p.setBoundaryCondition("rightWalls",
+                           0, 1, 0.0);
+
+    // 设置密度/粘度
+    FaceField<Scalar> rho("rho", &mesh);
+    rho.setValue(1.0);
+
+    FaceField<Scalar> nu("nu", &mesh);
+    nu.setValue(0.01);
+
+    // SIMPLE算法参数
+    simple::SIMPLE::Options options;
+    options.maxOuterIterations = 1000;      // 外迭代次数
+    options.alphaU = 0.7;                   // 松弛因子
+    options.alphaP = 0.3;
+    options.convergenceTolerance = 1e-8;
+    options.nNonOrthogonalCorrectors = 2;
+    options.divScheme = fvm::DivType::SUD;  // 目前只支持FUD
+
+    // 如果是压力出口，例如 patch 名为 "outlet"，则打开：
+    // options.fixedPressurePatches = {"outlet"};
+
+    simple::SIMPLE solver(U, p, rho, nu, options);
+
+    const auto residual = solver.solve();
+
+    U.writeToFile("U_SIMPLE.dat");
+    p.writeToFile("p_SIMPLE.dat");
+
+    std::cout << "Final continuity residual = "
+        << residual.continuity << std::endl;
+
+    return 0;
+#endif
 
 #if 0
-    try
-    {
+    try {
         Mesh mesh("tempFile/OpenFOAM_tutorials/pitzDailySteady/constant/polyMesh");
 
         SparseMatrix<Scalar> A_b(&mesh);
@@ -28,23 +89,20 @@ int main()
         // A_b.setValue(0, 4, 99);
 
         // 打印第一行前5元素
-        for (int i = 0; i < 5; i++)
-        {
+        for (int i = 0; i < 5; i++) {
             std::cout << A_b.at(0, i) << " ";
         }
         std::cout << std::endl;
 
     }
-    catch (std::exception& e)
-    {
+    catch (std::exception &e) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }
 #endif
 
 
 #if 0
-    try
-    {
+    try {
         using Scalar = double;
         std::vector<std::vector<Scalar>> B{
             { 0, 0, 0, 0, 0 },
@@ -79,8 +137,7 @@ int main()
 
 
     }
-    catch (std::exception& e)
-    {
+    catch (std::exception &e) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }
 #endif
@@ -88,8 +145,7 @@ int main()
 
     // 对流项测试程序
 #if 0
-    try
-    {
+    try {
         using Scalar = double;
         // 读取网格
         Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
@@ -99,12 +155,10 @@ int main()
 
         phi.setValue(
             [](Scalar x, Scalar y, Scalar) {
-                if (y > x)
-                {
+                if (y > x) {
                     return 100;
                 }
-                else
-                {
+                else {
                     return 0;
                 }
             }
@@ -133,8 +187,7 @@ int main()
 
         // 创建稀疏矩阵
         // 对于非第一类边界条件需要循环迭代才可求解
-        for (int i = 0; i < 1000; i++)
-        {
+        for (int i = 0; i < 1000; i++) {
             fvm::Div(A_b, rho, phi, U, fvm::DivType::FUD);
             // A_b.printMatrix();
 
@@ -148,8 +201,7 @@ int main()
 
             Scalar residual = solver.Error();
             std::cout << "residual: " << residual << " " << i << std::endl;
-            if (residual < 1e-6)
-            {
+            if (residual < 1e-6) {
                 break;
             }
 
@@ -169,8 +221,7 @@ int main()
 
         // getchar();
     }
-    catch (const std::exception& e)
-    {
+    catch (const std::exception &e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         return 1;
     }
@@ -179,8 +230,7 @@ int main()
 
     // 矢量求解测试
 #if 0
-    try
-    {
+    try {
         using Scalar = double;
         // 读取网格
         Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
@@ -207,8 +257,7 @@ int main()
 
         // 创建稀疏矩阵
         // 对于非第一类边界条件需要循环迭代才可求解
-        for (int i = 0; i < 1000; i++)
-        {
+        for (int i = 0; i < 1000; i++) {
             fvm::Laplacian(A_b, gamma, phi);
 
             Solver<Vector<Scalar>> solver(A_b, Solver<Vector<Scalar>>::Method::Jacobi, 100000);
@@ -216,8 +265,7 @@ int main()
             solver.init(phi.getCellField_0().getData());
             Scalar residual = solver.Error();
             std::cout << "residual: " << residual << " " << i << std::endl;
-            if (residual < 1e-6)
-            {
+            if (residual < 1e-6) {
                 break;
             }
 
@@ -237,8 +285,7 @@ int main()
 
         // getchar();
     }
-    catch (const std::exception& e)
-    {
+    catch (const std::exception &e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         return 1;
     }
@@ -247,8 +294,7 @@ int main()
 
     // 方腔第二类边界条件测试
 #if 0
-    try
-    {
+    try {
         using Scalar = double;
         // 读取网格
         Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
@@ -271,8 +317,7 @@ int main()
 
         // 创建稀疏矩阵
         // 对于非第一类边界条件需要循环迭代才可求解
-        for (int i = 0; i < 1000; i++)
-        {
+        for (int i = 0; i < 1000; i++) {
             fvm::Laplacian(A_b, gamma, phi);
 
             Solver<Scalar> solver(A_b, Solver<Scalar>::Method::Jacobi, 100000);
@@ -280,8 +325,7 @@ int main()
             solver.init(phi.getCellField_0().getData());
             Scalar residual = solver.Error();
             std::cout << "residual: " << residual << " " << i << std::endl;
-            if (residual < 1e-6)
-            {
+            if (residual < 1e-6) {
                 break;
             }
 
@@ -301,8 +345,7 @@ int main()
 
         // getchar();
     }
-    catch (const std::exception& e)
-    {
+    catch (const std::exception &e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         return 1;
     }
@@ -310,9 +353,8 @@ int main()
 
 
     // 方腔第一类边界条件测试
-#if 1
-    try
-    {
+#if 0
+    try {
         using Scalar = double;
         // 读取网格
         Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
@@ -335,8 +377,7 @@ int main()
 
         // 创建稀疏矩阵
         // 对于非第一类边界条件需要循环迭代才可求解
-        for (int i = 0; i < 1000; i++)
-        {
+        for (int i = 0; i < 1000; i++) {
             fvm::Laplacian(A_b, gamma, phi);
 
             Solver<Scalar> solver(A_b, Solver<Scalar>::Method::Jacobi, 100000);
@@ -344,8 +385,7 @@ int main()
             solver.init(phi.getCellField_0().getData());
             Scalar residual = solver.Error();
             std::cout << "residual: " << residual << " " << i << std::endl;
-            if (residual < 1e-6)
-            {
+            if (residual < 1e-6) {
                 break;
             }
 
@@ -365,8 +405,7 @@ int main()
 
         // getchar();
     }
-    catch (const std::exception& e)
-    {
+    catch (const std::exception &e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         return 1;
     }

@@ -87,10 +87,10 @@ namespace fvm
 
         using ULL = unsigned long long;
         using LL = long long;
-        const std::vector<Face> faces = mesh->getFaces();
-        const std::vector<Cell> cells = mesh->getCells();
-        const std::vector<ULL> internalFaceIndexes = mesh->getInternalFaceIndexes();
-        const std::vector<ULL> boundaryFaceIndexes = mesh->getBoundaryFaceIndexes();
+        const std::vector<Face>& faces = mesh->getFaces();
+        const std::vector<Cell>& cells = mesh->getCells();
+        const std::vector<ULL>& internalFaceIndexes = mesh->getInternalFaceIndexes();
+        const std::vector<ULL>& boundaryFaceIndexes = mesh->getBoundaryFaceIndexes();
         const FaceField<Tp>& facefield = phi.getFaceField();
         Interpolation<GradType> interpolator; // 用于插值的函数对象
 

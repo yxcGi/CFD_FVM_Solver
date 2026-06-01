@@ -27,6 +27,12 @@ namespace fvm
         FaceField<Vector<Scalar>>& U,
         DivType type = DivType::FUD
     );
+
+    template <typename Tp>
+    void Source(
+        SparseMatrix<Tp> &matrix,
+        const CellField<Tp> &S_c
+    );
 }
 
 
@@ -111,6 +117,7 @@ public:
 
     friend void fvm::Div<Tp>(SparseMatrix<Tp>& matrix, const FaceField<Scalar>& rho, Field<Tp>& phi, FaceField<Vector<Scalar>>& U, fvm::DivType type);
 
+    friend void fvm::Source<Tp>(SparseMatrix<Tp>& matrix, const CellField<Tp>& S_c);
 
 private:
 

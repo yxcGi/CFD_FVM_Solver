@@ -626,6 +626,7 @@ namespace algorithm {
             }
         }
         inline void SIMPLE::solverPressureCorrEqn() {
+            pCorr_.setValue(options_.pressureReferenceValue);
             // 计算负的速度散度
             CellField<Scalar> negDivUCell("-divU", mesh_, Scalar());
             std::vector<Scalar>& negDivUCellData = negDivUCell.getData();
@@ -763,7 +764,6 @@ namespace algorithm {
             for (ULL cellId = 0; cellId < mesh_->getCellNumber(); ++cellId) {
                 pData[cellId] += options_.alphaP * pCorrData[cellId];
             }
-            pData.swap(p_.getCellField().getData());
             p_.cellToFace();
         }
         inline void SIMPLE::correctVelocity() {

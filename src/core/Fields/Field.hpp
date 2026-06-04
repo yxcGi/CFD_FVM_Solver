@@ -124,7 +124,7 @@ private:
     std::string name_;
     GradientMethod gradientMethod_{ GradientMethod::GAUSS_GREEN };      // 梯度计算方法
     std::unordered_map<std::string, BoundaryCondition<Tp>> boundaryConditions_;
-    Interpolation<Tp> interpolator_;     // 插值函数对象
+    util::Interpolation<Tp> interpolator_;     // 插值函数对象
 };
 
 #pragma region 函数实现
@@ -136,7 +136,7 @@ inline Field<Tp>::Field(const std::string& name, Mesh* mesh)
     , cellField_0_(name, mesh)
     , cellGradientField_(name, mesh)
     , name_(name)
-    , interpolator_(Interpolation<Tp>())
+    , interpolator_(util::Interpolation<Tp>())
 {
     const std::unordered_map<std::string, BoundaryPatch>& boundaryPatches = mesh->getBoundaryPatches();
     for (const auto& [name, patch] : boundaryPatches)

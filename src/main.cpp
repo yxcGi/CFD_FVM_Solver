@@ -10,10 +10,73 @@
 #include "Div.hpp"
 #include "Source.hpp"
 #include "SIMPLE.hpp"
+#include "SIMPLE1.hpp"
 
 
 using Scalar = double;
 int main() {
+
+#if 1
+    // 读取网格
+    Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
+
+    // 定义速度场/压力场
+    Field<Vector<Scalar>> U("U", &mesh);
+    Field<Scalar> p("p", &mesh);
+
+    // 初始化速度场/压力场
+    U.setValue(Vector<Scalar>(0, 0, 0));
+    p.setValue(0.0);
+
+    // 设置边界条件
+    U.setBoundaryCondition("movingWall",
+                           1, 0, Vector<Scalar>(50, 0, 0));
+    U.setBoundaryCondition("leftWalls",
+                           1, 0, Vector<Scalar>(0, 0, 0));
+    U.setBoundaryCondition("bottomWalls",
+                           1, 0, Vector<Scalar>(0, 0, 0));
+    U.setBoundaryCondition("rightWalls",
+                           1, 0, Vector<Scalar>(0, 0, 0));
+
+    p.setBoundaryCondition("movingWall",
+                           0, 1, 0.0);
+    p.setBoundaryCondition("leftWalls",
+                           0, 1, 0.0);
+    p.setBoundaryCondition("bottomWalls",
+                           0, 1, 0.0);
+    p.setBoundaryCondition("rightWalls",
+                           0, 1, 0.0);
+
+    // 设置密度/粘度
+    FaceField<Scalar> rho("rho", &mesh);
+    rho.setValue(1.0);
+
+    FaceField<Scalar> nu("nu", &mesh);
+    nu.setValue(0.01);
+
+    // SIMPLE算法参数
+    algorithm::simple::SIMPLE::Options options;
+    options.maxOuterIterations = 1000;      // 外迭代次数
+    options.alphaU = 0.7;                   // 松弛因子
+    options.alphaP = 0.3;
+    options.convergenceTolerance = 1e-8;
+    options.nNonOrthogonalCorrectors = 2;
+    options.divScheme = fvm::DivType::SUD;  // 目前只支持FUD
+
+    // 如果是压力出口，例如 patch 名为 "outlet"，则打开：
+    // options.fixedPressurePatches = {"outlet"};
+
+    algorithm::simple::SIMPLE solver(U, p, rho, nu, options);
+
+    solver.solve();
+
+    U.writeToFile("U_SIMPLE.dat");
+    p.writeToFile("p_SIMPLE.dat");
+
+    // std::cout << "Final continuity residual = " << residual.continuity << std::endl;
+
+    return 0;
+#endif
 
 #if 0
     // 读取网格
@@ -381,7 +444,7 @@ int main() {
 
 
     // 方腔第一类边界条件测试
-#if 1
+#if 0
     try {
         using Scalar = double;
         // 读取网格

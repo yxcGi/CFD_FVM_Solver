@@ -17,7 +17,11 @@ namespace fvm
 {
 
     template<typename Tp>
-    void Laplacian(SparseMatrix<Tp>& matrix, const FaceField<Scalar>& gamma, Field<Tp>& phi);
+    void Laplacian(
+        SparseMatrix<Tp> &matrix,
+        const FaceField<Scalar> &gamma,
+        Field<Tp> &phi
+    );
 
     template <typename Tp>
     void Div(
@@ -26,6 +30,13 @@ namespace fvm
         Field<Tp>& phi,
         FaceField<Vector<Scalar>>& U,
         DivType type = DivType::FUD
+    );
+
+    template <typename Tp>
+    void Source(
+        SparseMatrix<Tp> &matrix,
+        const CellField<Scalar> &S_p,
+        const CellField<Tp> &S_c
     );
 
     template <typename Tp>
@@ -115,7 +126,9 @@ public:
     // 给离散函数设置友元
     friend void fvm::Laplacian<Tp>(SparseMatrix<Tp>& matrix, const FaceField<Scalar>& gamma, Field<Tp>& phi);
 
-    friend void fvm::Div<Tp>(SparseMatrix<Tp>& matrix, const FaceField<Scalar>& rho, Field<Tp>& phi, FaceField<Vector<Scalar>>& U, fvm::DivType type);
+    friend void fvm::Div<Tp>(SparseMatrix<Tp> &matrix, const FaceField<Scalar> &rho, Field<Tp> &phi, FaceField<Vector<Scalar>> &U, fvm::DivType type);
+
+    friend void fvm::Source<Tp>(SparseMatrix<Tp> &matrix, const CellField<Scalar> &S_p, const CellField<Tp> &S_c);
 
     friend void fvm::Source<Tp>(SparseMatrix<Tp>& matrix, const CellField<Tp>& S_c);
 

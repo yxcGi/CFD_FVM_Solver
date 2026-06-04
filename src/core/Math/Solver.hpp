@@ -330,7 +330,7 @@ inline void Solver<Tp>::relax(Scalar alpha)
 
     // 将方程对角线元素除以alpha
     ULL size = equation_.size();
-    std::vector<Tp> diag(size);
+    std::vector<Scalar> diag(size);
     for (ULL i = 0; i < size; ++i)
     {
         // 对角线记录的是已经除以alpha后的值

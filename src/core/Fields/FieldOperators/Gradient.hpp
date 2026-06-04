@@ -34,7 +34,7 @@ template <typename Tp>
 auto grad(
     const Field<Tp>& field,
     GradientMethod method = GradientMethod::GAUSS_GREEN
-) -> Field<decltype(Tp()* Vector<Scalar>())>
+) -> CellField<decltype(Tp()* Vector<Scalar>())>
 {
     if (!field.isValid())
     {
@@ -45,10 +45,10 @@ auto grad(
     using ULL = unsigned long long;
 
     using GradType = decltype(Tp()* Vector<Scalar>());  // 梯度类型
-    Field<GradType> resultGradField("Gradient_" + field.getName(), field.getMesh());
+    // Field<GradType> resultGradField("Gradient_" + field.getName(), field.getMesh());
+    
+    CellField<GradType> resultGradField("Gradient_" + field.getName(), field.getMesh());// 取出单元梯度（只给单元赋值）
     resultGradField.initialize();   // 初始化（设置为有效）
-
-    CellField<GradType>& resultGradCellField_0 = resultGradField.getCellField_0();  // 取出单元梯度（只给单元赋值）
     const FaceField<Tp>& faceField = field.getFaceField();
     const std::vector<Cell>& cells = field.getMesh()->getCells();
     const std::vector<Face>& faces = field.getMesh()->getFaces();
@@ -83,7 +83,7 @@ auto grad(
                         total_Phi_Sf -= phi * Sf;
                     }
                 }
-                resultGradCellField_0[i] = total_Phi_Sf / cell.getVolume();
+                resultGradField[i] = total_Phi_Sf / cell.getVolume();
             }
         }
         else if (field.getMesh()->getDimension() == Mesh::Dimension::THREE_D)
@@ -106,7 +106,7 @@ auto grad(
                         total_Phi_Sf -= phi * Sf;
                     }
                 }
-                resultGradCellField_0[i] = total_Phi_Sf / cell.getVolume();
+                resultGradField[i] = total_Phi_Sf / cell.getVolume();
             }
         }
         else

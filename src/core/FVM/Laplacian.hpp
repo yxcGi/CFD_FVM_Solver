@@ -92,7 +92,7 @@ namespace fvm
         const std::vector<ULL>& internalFaceIndexes = mesh->getInternalFaceIndexes();
         const std::vector<ULL>& boundaryFaceIndexes = mesh->getBoundaryFaceIndexes();
         const FaceField<Tp>& facefield = phi.getFaceField();
-        Interpolation<GradType> interpolator; // 用于插值的函数对象
+        util::Interpolation<GradType> interpolator; // 用于插值的函数对象
 
         // 获取单元梯度场
         // 计算内部面上的梯度场

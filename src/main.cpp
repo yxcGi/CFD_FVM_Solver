@@ -30,7 +30,7 @@ int main() {
 
     // 设置边界条件
     U.setBoundaryCondition("movingWall",
-                           1, 0, Vector<Scalar>(50, 0, 0));
+                           1, 0, Vector<Scalar>(10, 0, 0));
     U.setBoundaryCondition("leftWalls",
                            1, 0, Vector<Scalar>(0, 0, 0));
     U.setBoundaryCondition("bottomWalls",

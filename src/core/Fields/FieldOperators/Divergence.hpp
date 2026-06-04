@@ -51,7 +51,7 @@ auto divergence(const FaceField<Tp>& field) -> CellField<decltype(Tp()& Vector<S
                     div -= phi & Sf;
                 }
             }
-            resultDivField[i] = div;
+            resultDivField[i] = div / cell.getVolume();
         }
     }
     else if (field.getMesh()->getDimension() == Mesh::Dimension::THREE_D) {
@@ -69,7 +69,7 @@ auto divergence(const FaceField<Tp>& field) -> CellField<decltype(Tp()& Vector<S
                     div -= phi & Sf;
                 }
             }
-            resultDivField[i] = div;
+            resultDivField[i] = div / cell.getVolume();
         }
     }
     return resultDivField;

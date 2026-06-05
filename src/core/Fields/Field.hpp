@@ -581,39 +581,59 @@ inline void Field<Tp>::writToTecplot(const std::string& fileName, Mesh::Dimensio
             if (this->getMesh()->getMeshShape() ==
                 Mesh::MeshShape::TRIANGLE)      // 二维三角形网格  标量
             {
-                ofs << ",ET=triangle" << std::endl;     // 挖坑
-                // 先输出所有的x，y，z
-                for (const Point& point : mesh->getPoints())
-                {
-                    ofs << point.x() << " ";
-                }
-                ofs << "\n";
-                for (const Point& point : mesh->getPoints())
-                {
-                    ofs << point.y() << " ";
-                }
-                ofs << "\n";
-                for (const Point& point : mesh->getPoints())
-                {
-                    ofs << point.z() << " ";
-                }
-                ofs << "\n";
+                ofs << ",ZONETYPE=FETRIANGLE\n";
+                ofs << "DATAPACKING=BLOCK\n";
+                ofs << "VARLOCATION=([1-2]=NODAL, [3]=CELLCENTERED)\n";
 
-                // 输出每个cell的场值
+                // 输出所有点的 x 坐标
+                for (const Point& point : mesh->getPoints())
+                {
+                    ofs << point.x() << "\n";
+                }
+
+                // 输出所有点的 y 坐标
+                for (const Point& point : mesh->getPoints())
+                {
+                    ofs << point.y() << "\n";
+                }
+
+                // 输出所有单元中心的标量值
                 for (ULL i = 0; i < mesh->getCellNumber(); ++i)
                 {
-                    ofs << this->cellField_[i] << " ";
+                    ofs << this->cellField_[i] << "\n";
                 }
-                ofs << "\n";
 
-
-                // 输出每个cell的点索引
+                // 输出三角形连接表
                 for (const Cell& cell : mesh->getCells())
                 {
-                    for (const ULL index : cell.getPointIndexes())
+                    std::vector<ULL> trianglePointIndexes;
+
+                    for (const ULL faceId : cell.getFaceIndexes())
                     {
-                        ofs << index << " ";
+                        if (faceId >= mesh->getEmptyFaceIndexesPair().first &&
+                            faceId < mesh->getEmptyFaceIndexesPair().second)
+                        {
+                            trianglePointIndexes = mesh->getFaces()[faceId].getPointIndexes();
+                            break;
+                        }
                     }
+
+                    if (trianglePointIndexes.empty())
+                    {
+                        trianglePointIndexes = cell.getPointIndexes();
+                    }
+
+                    if (trianglePointIndexes.size() != 3)
+                    {
+                        std::cerr << "Tecplot triangle output error: cell does not have 3 points.\n";
+                        throw std::runtime_error("Invalid triangle cell point count");
+                    }
+
+                    for (const ULL pointId : trianglePointIndexes)
+                    {
+                        ofs << pointId + 1 << " ";
+                    }
+
                     ofs << "\n";
                 }
             }
@@ -668,8 +688,68 @@ inline void Field<Tp>::writToTecplot(const std::string& fileName, Mesh::Dimensio
             if (this->getMesh()->getMeshShape() ==
                 Mesh::MeshShape::TRIANGLE)      // 二维三角形网格  矢量
             {
-                ofs << ",et=triangle" << std::endl;
+                ofs << ",ZONETYPE=FETRIANGLE\n";
+                ofs << "DATAPACKING=BLOCK\n";
+                ofs << "VARLOCATION=([1-2]=NODAL, [3-4]=CELLCENTERED)\n";
 
+                // 输出所有点的 x 坐标
+                for (const Point& point : mesh->getPoints())
+                {
+                    ofs << point.x() << "\n";
+                }
+
+                // 输出所有点的 y 坐标
+                for (const Point& point : mesh->getPoints())
+                {
+                    ofs << point.y() << "\n";
+                }
+
+                // 输出所有单元中心的 U 分量
+                for (ULL i = 0; i < mesh->getCellNumber(); ++i)
+                {
+                    ofs << this->cellField_[i].x() << "\n";
+                }
+
+                // 输出所有单元中心的 V 分量
+                for (ULL i = 0; i < mesh->getCellNumber(); ++i)
+                {
+                    ofs << this->cellField_[i].y() << "\n";
+                }
+
+                // 输出三角形单元连接表
+                for (const Cell& cell : mesh->getCells())
+                {
+                    std::vector<ULL> trianglePointIndexes;
+
+                    // 优先从 empty 面中取二维单元的真实三角形顶点
+                    for (const ULL faceId : cell.getFaceIndexes())
+                    {
+                        if (faceId >= mesh->getEmptyFaceIndexesPair().first &&
+                            faceId < mesh->getEmptyFaceIndexesPair().second)
+                        {
+                            trianglePointIndexes = mesh->getFaces()[faceId].getPointIndexes();
+                            break;
+                        }
+                    }
+
+                    // 如果没有 empty 面，则退回使用 cell 自身的点索引
+                    if (trianglePointIndexes.empty())
+                    {
+                        trianglePointIndexes = cell.getPointIndexes();
+                    }
+
+                    if (trianglePointIndexes.size() != 3)
+                    {
+                        std::cerr << "Tecplot triangle output error: cell does not have 3 points.\n";
+                        throw std::runtime_error("Invalid triangle cell point count");
+                    }
+
+                    for (const ULL pointId : trianglePointIndexes)
+                    {
+                        ofs << pointId + 1 << " ";   // Tecplot 节点编号从 1 开始
+                    }
+                    ofs << "\n";
+                }
             }
             else if (this->getMesh()->getMeshShape() ==
                 Mesh::MeshShape::QUADRILATERAL) // 二维四边形网格  矢量
@@ -719,9 +799,150 @@ inline void Field<Tp>::writToTecplot(const std::string& fileName, Mesh::Dimensio
             }
         }
     }
-    else if (dim == Mesh::Dimension::THREE_D)   // 三维，挖坑
+    else if (dim == Mesh::Dimension::THREE_D)
     {
+        std::ofstream ofs(fileName, std::ios::trunc);
+        if (!ofs.is_open())
+        {
+            std::cerr << "writToTecplot() Error: Unable to open file "
+                << fileName << " for writing.\n";
+            throw std::runtime_error(fileName + " file open error");
+        }
 
+        const Mesh::MeshShape meshShape = mesh->getMeshShape();
+
+        auto writeNodalCoordinates = [&ofs, mesh]() {
+            // 输出所有节点的 x 坐标
+            for (const Point& point : mesh->getPoints())
+            {
+                ofs << point.x() << "\n";
+            }
+
+            // 输出所有节点的 y 坐标
+            for (const Point& point : mesh->getPoints())
+            {
+                ofs << point.y() << "\n";
+            }
+
+            // 输出所有节点的 z 坐标
+            for (const Point& point : mesh->getPoints())
+            {
+                ofs << point.z() << "\n";
+            }
+            };
+
+        auto writeCellConnectivity =
+            [&ofs, mesh](const ULL expectedCellPointNumber) {
+            for (const Cell& cell : mesh->getCells())
+            {
+                const std::vector<ULL>& pointIndexes = cell.getPointIndexes();
+
+                if (pointIndexes.size() != expectedCellPointNumber)
+                {
+                    std::cerr << "Tecplot 3D output error: invalid cell point count. "
+                        << "Expected " << expectedCellPointNumber
+                        << ", but got " << pointIndexes.size() << ".\n";
+
+                    throw std::runtime_error("Invalid 3D cell point count");
+                }
+
+                for (const ULL pointId : pointIndexes)
+                {
+                    ofs << pointId + 1 << " ";   // Tecplot 节点编号从 1 开始
+                }
+
+                ofs << "\n";
+            }
+            };
+
+        std::string zoneType;
+        ULL expectedCellPointNumber = 0;
+
+        if (meshShape == Mesh::MeshShape::TETRAHEDRON)
+        {
+            zoneType = "FETETRAHEDRON";
+            expectedCellPointNumber = 4;
+        }
+        else if (meshShape == Mesh::MeshShape::BRICK)
+        {
+            zoneType = "FEBRICK";
+            expectedCellPointNumber = 8;
+        }
+        else
+        {
+            std::cerr << "writToTecplot() Error: unsupported 3D mesh shape.\n";
+            throw std::runtime_error("Unsupported 3D mesh shape");
+        }
+
+        ofs << "Title=\"" << this->getName() << "_3D_Tecplot\"\n";
+
+        if constexpr (std::is_same_v<Tp, Scalar>)
+        {
+            std::cout << "Writing 3D scalar field to Tecplot file..." << std::endl;
+
+            ofs << R"(VARIABLES="X","Y","Z",")" << name_ << "\"\n";
+
+            ofs << "ZONE T=\"" << name_
+                << "\",N=" << mesh->getPointNumber()
+                << ",E=" << mesh->getCellNumber()
+                << ",ZONETYPE=" << zoneType << "\n";
+
+            ofs << "DATAPACKING=BLOCK\n";
+            ofs << "VARLOCATION=([1-3]=NODAL, [4]=CELLCENTERED)\n";
+
+            // 输出节点坐标 X, Y, Z
+            writeNodalCoordinates();
+
+            // 输出单元中心标量值
+            for (ULL i = 0; i < mesh->getCellNumber(); ++i)
+            {
+                ofs << this->cellField_[i] << "\n";
+            }
+
+            // 输出单元连接表
+            writeCellConnectivity(expectedCellPointNumber);
+        }
+        else if constexpr (std::is_same_v<Tp, Vector<Scalar>>)
+        {
+            std::cout << "Writing 3D vector field to Tecplot file..." << std::endl;
+
+            ofs << R"(VARIABLES="X","Y","Z",")"
+                << name_ << "_U\",\""
+                << name_ << "_V\",\""
+                << name_ << "_W\"\n";
+
+            ofs << "ZONE T=\"" << name_
+                << "\",N=" << mesh->getPointNumber()
+                << ",E=" << mesh->getCellNumber()
+                << ",ZONETYPE=" << zoneType << "\n";
+
+            ofs << "DATAPACKING=BLOCK\n";
+            ofs << "VARLOCATION=([1-3]=NODAL, [4-6]=CELLCENTERED)\n";
+
+            // 输出节点坐标 X, Y, Z
+            writeNodalCoordinates();
+
+            // 输出单元中心 U 分量
+            for (ULL i = 0; i < mesh->getCellNumber(); ++i)
+            {
+                ofs << this->cellField_[i].x() << "\n";
+            }
+
+            // 输出单元中心 V 分量
+            for (ULL i = 0; i < mesh->getCellNumber(); ++i)
+            {
+                ofs << this->cellField_[i].y() << "\n";
+            }
+
+            // 输出单元中心 W 分量
+            for (ULL i = 0; i < mesh->getCellNumber(); ++i)
+            {
+                ofs << this->cellField_[i].z() << "\n";
+            }
+
+            // 输出单元连接表
+            writeCellConnectivity(expectedCellPointNumber);
+        }
     }
 }
 

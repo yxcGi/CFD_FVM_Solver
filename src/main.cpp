@@ -56,7 +56,7 @@ int main() {
 
     // SIMPLE算法参数
     algorithm::simple::SIMPLE::Options options;
-    options.maxOuterIterations = 1000;      // 外迭代次数
+    options.maxOuterIterations = 5000;      // 外迭代次数
     options.alphaU = 0.7;                   // 松弛因子
     options.alphaP = 0.3;
     options.convergenceTolerance = 1e-8;

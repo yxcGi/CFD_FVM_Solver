@@ -598,7 +598,7 @@ namespace algorithm {
                 ++cellId;
             }
             // 内迭代(适应第二类边界条件)
-            for (int i = 0; i < 1; ++i) {
+            for (int i = 0; i < options_.innerMaxIterations; ++i) {
                 momentumEqn_.clear();
                 // 对流项，扩散项，源项
                 fvm::Div(momentumEqn_, rho_, U_, Uf_, options_.divScheme);                 // 对流项
@@ -616,12 +616,9 @@ namespace algorithm {
                 }
                 momentumSolver.setTolerance(options_.momentumTolerance);
                 momentumSolver.solve(); // 求解
-                // 判断相对误差
-                if (computeRelativeChange(
-                    U_.getCellField().getData(),
-                    U_.getCellField_0().getData()) <
-                    options_.relativeTolerance) {
-                    break;
+                if (momentumSolver.Error() < options_.relativeTolerance) {
+                    std::cout << momentumSolver.Error() << std::endl;
+                    return;
                 }
             }
         }
@@ -652,11 +649,9 @@ namespace algorithm {
                 pressureCorrSolver.init(pCorr_.getCellField().getData());
                 pressureCorrSolver.setTolerance(options_.pressureTolerance);
                 pressureCorrSolver.solve();
-                if (computeRelativeChange(
-                    pCorr_.getCellField().getData(),
-                    pCorr_.getCellField_0().getData()) <
-                    options_.relativeTolerance ) {
-                    break;
+                if (pressureCorrSolver.Error() < options_.relativeTolerance) {
+                    std::cout << pressureCorrSolver.Error() << std::endl;
+                    return;
                 }
             }
         }
@@ -695,6 +690,7 @@ namespace algorithm {
                 }
             }
 
+            // 设置压力修正值场边界条件
             for (const auto& [name, patch] : patches) {
                 if (patch.getType() == BoundaryPatch::BoundaryType::EMPTY) {
                     continue;
@@ -704,7 +700,7 @@ namespace algorithm {
                     continue;
                 }
                 else {
-                    pCorr_.setBoundaryCondition(name, 1, 0, 0); // 设置为固定压力边界条件;
+                    pCorr_.setBoundaryCondition(name, 1, 0, 0); // 设置为固定压力边界条件(修正值为0);
                 }
                 const ULL startFace = patch.getStartFace();
                 const ULL nFace = patch.getNFace();
@@ -760,19 +756,23 @@ namespace algorithm {
         }
         inline void SIMPLE::correctPressure() {
             std::vector<Scalar>& pData = p_.getCellField().getData();
+            std::vector<Scalar>& pOldData = p_.getCellField_0().getData();
             const std::vector<Scalar>& pCorrData = pCorr_.getCellField().getData();
             for (ULL cellId = 0; cellId < mesh_->getCellNumber(); ++cellId) {
                 pData[cellId] += options_.alphaP * pCorrData[cellId];
             }
+            pOldData = pData;   // 同步CellField_0
             p_.cellToFace();
         }
         inline void SIMPLE::correctVelocity() {
             std::vector<Vector<Scalar>>& UData = U_.getCellField().getData();
+            std::vector<Vector<Scalar>>& UOldData = U_.getCellField_0().getData();
             const std::vector<Scalar>& rAUData = rAU_.getCellField().getData();
             const std::vector<Vector<Scalar>>& gardPCorrData = pCorr_.getCellGradientField().getData();
             for (ULL cellId = 0; cellId < mesh_->getCellNumber(); ++cellId) {
                 UData[cellId] -= rAUData[cellId] * gardPCorrData[cellId];
             }
+            UOldData = UData;   // 同步CellField_0
             U_.cellToFace();
         }
         inline Scalar SIMPLE::computeContinuityResidual() const {

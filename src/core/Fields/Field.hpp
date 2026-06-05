@@ -90,7 +90,7 @@ public:
     // cell场到face场的插值，边界面需要用到边界条件（边界条件需设置完整），调用后会更新当前场的梯度
     void cellToFace(interpolation::Scheme scheme = interpolation::Scheme::LINEAR);
 
-
+    const std::unordered_map<std::string, BoundaryCondition<Tp>>& getBoundaryConditions() const;
 
     // 设置计算梯度方法
     void setGradientMethod(GradientMethod method);
@@ -100,6 +100,8 @@ public:
     /* --------设置边界条件-------- */
     // a * φ + b * ∂φ/∂n = c
     void setBoundaryCondition(const std::string& name, Scalar a, Scalar b, const Tp& c);
+
+
 
 
     void writeToFile(const std::string& fileName, WriteFileType fileType = WriteFileType::TECPLOT) const;
@@ -335,7 +337,7 @@ inline void Field<Tp>::cellToFace(interpolation::Scheme scheme)
     const std::vector<Cell>& cells = mesh->getCells();
 
     // 先遍历内部面
-    std::vector<ULL> internalFaceIndexes = mesh->getInternalFaceIndexes();
+    const std::vector<ULL>& internalFaceIndexes = mesh->getInternalFaceIndexes();
     const CellField<Tp>& cellField = this->getCellField();
 
     for (const ULL internalFaceIndex : internalFaceIndexes)     // 遍历内部面
@@ -419,6 +421,20 @@ inline void Field<Tp>::cellToFace(interpolation::Scheme scheme)
     }
     // 利用新的面值记录计算本时间步的梯度，用于下一时间步的边界面值计算
     cellGradientField_ = grad(gradientMethod_);
+}
+
+template<typename Tp>
+inline const std::unordered_map<std::string, BoundaryCondition<Tp>>& Field<Tp>::getBoundaryConditions() const
+{
+    if (!isValid())
+    {
+        throw std::runtime_error("Field<Tp>::getBoundaryConditions() Error: Field is not valid!");
+    }
+    if (!isBoundaryConditionValid())
+    {
+        throw std::runtime_error("Field<Tp>::getBoundaryConditions() Error: Boundary condition is not valid!");
+    }
+    return boundaryConditions_;
 }
 
 template<typename Tp>
@@ -586,7 +602,7 @@ inline void Field<Tp>::writToTecplot(const std::string& fileName, Mesh::Dimensio
                 // 输出每个cell的场值
                 for (ULL i = 0; i < mesh->getCellNumber(); ++i)
                 {
-                    ofs << this->cellField_0_[i] << " ";
+                    ofs << this->cellField_[i] << " ";
                 }
                 ofs << "\n";
 
@@ -620,7 +636,7 @@ inline void Field<Tp>::writToTecplot(const std::string& fileName, Mesh::Dimensio
                 // 输出所有单元的场值
                 for (ULL i = 0; i < mesh->getCellNumber(); ++i)
                 {
-                    ofs << this->cellField_0_[i] << "\n";
+                    ofs << this->cellField_[i] << "\n";
                 }
                 // 每个二维单元由哪几个点构成
                 for (const Cell& cell : mesh->getCells())
@@ -674,11 +690,11 @@ inline void Field<Tp>::writToTecplot(const std::string& fileName, Mesh::Dimensio
                 // 输出所有单元的场值(u, v)
                 for (ULL i = 0; i < mesh->getCellNumber(); ++i)
                 {
-                    ofs << this->cellField_0_[i].x() << "\n";
+                    ofs << this->cellField_[i].x() << "\n";
                 }
                 for (ULL i = 0; i < mesh->getCellNumber(); ++i)
                 {
-                    ofs << this->cellField_0_[i].y() << "\n";
+                    ofs << this->cellField_[i].y() << "\n";
                 }
 
                 // 输出每个单元的点顺序

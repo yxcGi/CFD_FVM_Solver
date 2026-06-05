@@ -13,10 +13,85 @@
 #include "SIMPLE1.hpp"
 
 
+
+
+
 using Scalar = double;
 int main() {
 
+
+
+    // 台阶流
 #if 1
+    auto start = std::chrono::high_resolution_clock::now();
+    // 读取网格
+    Mesh mesh("tempFile/OpenFOAM_tutorials/pitzDailySteady/constant/polyMesh");
+
+    // 定义速度场/压力场
+    Field<Vector<Scalar>> U("U", &mesh);
+    Field<Scalar> p("p", &mesh);
+
+    // 初始化速度场/压力场
+    U.setValue(Vector<Scalar>(0, 0, 0));
+    p.setValue(0.0);
+
+    // 设置边界条件
+    U.setBoundaryCondition("inlet",
+                           1, 0, Vector<Scalar>(10, 0, 0));
+    U.setBoundaryCondition("outlet",
+                           0, 1, Vector<Scalar>(0, 0, 0));
+    U.setBoundaryCondition("upperWall",
+                           1, 0, Vector<Scalar>(0, 0, 0));
+    U.setBoundaryCondition("lowerWall",
+                           1, 0, Vector<Scalar>(0, 0, 0));
+
+    p.setBoundaryCondition("inlet",
+                           0, 1, 0.0);
+    p.setBoundaryCondition("outlet",
+                           1, 0, 0.0);
+    p.setBoundaryCondition("upperWall",
+                           0, 1, 0.0);
+    p.setBoundaryCondition("lowerWall",
+                           0, 1, 0.0);
+
+    // 设置密度/粘度
+    FaceField<Scalar> rho("rho", &mesh);
+    rho.setValue(1.0);
+
+    FaceField<Scalar> nu("nu", &mesh);
+    nu.setValue(0.01);
+
+    // SIMPLE算法参数
+    algorithm::simple::SIMPLE::Options options;
+    options.maxOuterIterations = 500;      // 外迭代次数
+    options.alphaU = 0.7;                   // 松弛因子
+    options.alphaP = 0.3;
+    options.convergenceTolerance = 1e-8;
+    options.nNonOrthogonalCorrectors = 2;
+    options.divScheme = fvm::DivType::SUD;  // 目前只支持FUD
+    options.fixedPressurePatches = { "outlet" };
+    options.useParallel = true;
+
+    // 如果是压力出口，例如 patch 名为 "outlet"，则打开：
+    // options.fixedPressurePatches = {"outlet"};
+
+    algorithm::simple::SIMPLE solver(U, p, rho, nu, options);
+
+    solver.solve();
+    auto end = std::chrono::high_resolution_clock::now();
+    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000 << "s" << std::endl;
+
+    U.writeToFile("U_SIMPLE.dat");
+    p.writeToFile("p_SIMPLE.dat");
+
+    // std::cout << "Final continuity residual = " << residual.continuity << std::endl;
+
+    return 0;
+#endif
+
+
+    // 二维方腔
+#if 0
     // 读取网格
     Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
 
@@ -62,6 +137,7 @@ int main() {
     options.convergenceTolerance = 1e-8;
     options.nNonOrthogonalCorrectors = 2;
     options.divScheme = fvm::DivType::SUD;  // 目前只支持FUD
+    options.useParallel = false;
 
     // 如果是压力出口，例如 patch 名为 "outlet"，则打开：
     // options.fixedPressurePatches = {"outlet"};
@@ -78,68 +154,7 @@ int main() {
     return 0;
 #endif
 
-#if 0
-    // 读取网格
-    Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
 
-    // 定义速度场/压力场
-    Field<Vector<Scalar>> U("U", &mesh);
-    Field<Scalar> p("p", &mesh);
-
-    // 初始化速度场/压力场
-    U.setValue(Vector<Scalar>(0, 0, 0));
-    p.setValue(0.0);
-
-    // 设置边界条件
-    U.setBoundaryCondition("movingWall",
-                           1, 0, Vector<Scalar>(50, 0, 0));
-    U.setBoundaryCondition("leftWalls",
-                           1, 0, Vector<Scalar>(0, 0, 0));
-    U.setBoundaryCondition("bottomWalls",
-                           1, 0, Vector<Scalar>(0, 0, 0));
-    U.setBoundaryCondition("rightWalls",
-                           1, 0, Vector<Scalar>(0, 0, 0));
-
-    p.setBoundaryCondition("movingWall",
-                           0, 1, 0.0);
-    p.setBoundaryCondition("leftWalls",
-                           0, 1, 0.0);
-    p.setBoundaryCondition("bottomWalls",
-                           0, 1, 0.0);
-    p.setBoundaryCondition("rightWalls",
-                           0, 1, 0.0);
-
-    // 设置密度/粘度
-    FaceField<Scalar> rho("rho", &mesh);
-    rho.setValue(1.0);
-
-    FaceField<Scalar> nu("nu", &mesh);
-    nu.setValue(0.01);
-
-    // SIMPLE算法参数
-    simple::SIMPLE::Options options;
-    options.maxOuterIterations = 1000;      // 外迭代次数
-    options.alphaU = 0.7;                   // 松弛因子
-    options.alphaP = 0.3;
-    options.convergenceTolerance = 1e-8;
-    options.nNonOrthogonalCorrectors = 2;
-    options.divScheme = fvm::DivType::SUD;  // 目前只支持FUD
-
-    // 如果是压力出口，例如 patch 名为 "outlet"，则打开：
-    // options.fixedPressurePatches = {"outlet"};
-
-    simple::SIMPLE solver(U, p, rho, nu, options);
-
-    const auto residual = solver.solve();
-
-    U.writeToFile("U_SIMPLE.dat");
-    p.writeToFile("p_SIMPLE.dat");
-
-    std::cout << "Final continuity residual = "
-        << residual.continuity << std::endl;
-
-    return 0;
-#endif
 
 
     // 源项测试
@@ -186,7 +201,7 @@ int main() {
         std::cout << std::endl;
 
     }
-    catch (std::exception &e) {
+    catch (std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }
 #endif
@@ -228,7 +243,7 @@ int main() {
 
 
     }
-    catch (std::exception &e) {
+    catch (std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }
 #endif
@@ -312,7 +327,7 @@ int main() {
 
         // getchar();
     }
-    catch (const std::exception &e) {
+    catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         return 1;
     }
@@ -353,7 +368,6 @@ int main() {
 
             Solver<Vector<Scalar>> solver(A_b, Solver<Vector<Scalar>>::Method::Jacobi, 100000);
 
-            solver.init(phi.getCellField_0().getData());
             Scalar residual = solver.Error();
             std::cout << "residual: " << residual << " " << i << std::endl;
             if (residual < 1e-6) {
@@ -369,14 +383,12 @@ int main() {
             // std::cout << "计算耗时：" << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
             phi.cellToFace();
             A_b.clear();
-
         }
-
         phi.writeToFile("phi.dat");
 
         // getchar();
     }
-    catch (const std::exception &e) {
+    catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         return 1;
     }
@@ -408,12 +420,12 @@ int main() {
 
         // 创建稀疏矩阵
         // 对于非第一类边界条件需要循环迭代才可求解
-        for (int i = 0; i < 1000; i++) {
+        for (int i = 0; i < 1; i++) {
             fvm::Laplacian(A_b, gamma, phi);
 
             Solver<Scalar> solver(A_b, Solver<Scalar>::Method::Jacobi, 100000);
 
-            solver.init(phi.getCellField_0().getData());
+            solver.init(phi.getCellField().getData());
             Scalar residual = solver.Error();
             std::cout << "residual: " << residual << " " << i << std::endl;
             if (residual < 1e-6) {
@@ -436,7 +448,7 @@ int main() {
 
         // getchar();
     }
-    catch (const std::exception &e) {
+    catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         return 1;
     }
@@ -497,14 +509,14 @@ int main() {
 
         // getchar();
     }
-    catch (const std::exception &e) {
+    catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         return 1;
     }
 #endif 
 
 
-// 带源项的导热问题求解
+    // 带源项的导热问题求解
 #if 0
     try {
         using Scalar = double;
@@ -569,7 +581,7 @@ int main() {
 
         // getchar();
     }
-    catch (const std::exception &e) {
+    catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
         return 1;
     }
@@ -615,4 +627,5 @@ int main() {
     // cout << "v1 ⊗ v2 = " << dyad << endl;
 
     // return 0;
+    // }
 }

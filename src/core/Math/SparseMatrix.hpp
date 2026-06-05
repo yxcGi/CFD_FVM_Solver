@@ -461,13 +461,97 @@ inline void SparseMatrix<Tp>::printMatrix() const
 template<typename Tp>
 inline void SparseMatrix<Tp>::setValue(ULL i, ULL j, Scalar value)
 {
-    (*this)(i, j) = value;
+    // setValue() 是安全写接口：负责完整状态检查与索引检查。
+    // operator() 保持轻量访问，不在这里复用 operator()，避免错误信息过于粗糙。
+    if (!isValid_)
+    {
+        std::cerr << "SparseMatrix<Tp>::setValue(ULL i, ULL j, Scalar value) Error: matrix is not valid" << std::endl;
+        throw std::invalid_argument("matrix is not valid");
+    }
+
+    if (i >= size_ || j >= size_)
+    {
+        std::cerr << "SparseMatrix<Tp>::setValue(ULL i, ULL j, Scalar value) Error: index out of range" << std::endl;
+        throw std::out_of_range("index out of range");
+    }
+
+    if (!isCompressed_)
+    {
+        unCompressedMatrix_[i][j] = value;
+        return;
+    }
+
+    const ULL rowBegin = rowPointer_[i];
+    const ULL rowEnd = rowPointer_[i + 1];
+
+    // CSR 每行的 colIndexs_ 已经按升序排列；当 colIndex > j 时可以提前停止。
+    for (ULL index = rowBegin; index < rowEnd; ++index)
+    {
+        const ULL col = colIndexs_[index];
+
+        if (col == j)
+        {
+            values_[index] = value;
+            return;
+        }
+
+        if (col > j)
+        {
+            break;
+        }
+    }
+
+    std::cerr << "SparseMatrix<Tp>::setValue(ULL i, ULL j, Scalar value) Error: sparse entry ("
+        << i << ", " << j << ") does not exist" << std::endl;
+    throw std::out_of_range("sparse entry does not exist");
 }
 
 template<typename Tp>
 inline void SparseMatrix<Tp>::addValue(ULL i, ULL j, Scalar value)
 {
-    (*this)(i, j) += value;
+    // addValue() 是安全累加接口：负责完整状态检查与索引检查。
+    // 对 CSR 矩阵，只允许累加到已经预分配的结构非零位置。
+    if (!isValid_)
+    {
+        std::cerr << "SparseMatrix<Tp>::addValue(ULL i, ULL j, Scalar value) Error: matrix is not valid" << std::endl;
+        throw std::invalid_argument("matrix is not valid");
+    }
+
+    if (i >= size_ || j >= size_)
+    {
+        std::cerr << "SparseMatrix<Tp>::addValue(ULL i, ULL j, Scalar value) Error: index out of range" << std::endl;
+        throw std::out_of_range("index out of range");
+    }
+
+    if (!isCompressed_)
+    {
+        unCompressedMatrix_[i][j] += value;
+        return;
+    }
+
+    const ULL rowBegin = rowPointer_[i];
+    const ULL rowEnd = rowPointer_[i + 1];
+
+    // CSR 每行的 colIndexs_ 已经按升序排列；当 colIndex > j 时可以提前停止。
+    for (ULL index = rowBegin; index < rowEnd; ++index)
+    {
+        const ULL col = colIndexs_[index];
+
+        if (col == j)
+        {
+            values_[index] += value;
+            return;
+        }
+
+        if (col > j)
+        {
+            break;
+        }
+    }
+
+    std::cerr << "SparseMatrix<Tp>::addValue(ULL i, ULL j, Scalar value) Error: sparse entry ("
+        << i << ", " << j << ") does not exist" << std::endl;
+    throw std::out_of_range("sparse entry does not exist");
 }
 
 template<typename Tp>
@@ -675,6 +759,8 @@ inline const std::vector<typename SparseMatrix<Tp>::ULL>& SparseMatrix<Tp>::getR
 template<typename Tp>
 inline Scalar SparseMatrix<Tp>::at(ULL i, ULL j) const
 {
+    // at() 是安全只读访问接口：负责完整合法性检查。
+    // 对于稀疏矩阵中未显式存储的位置，按数学意义返回 0。
     if (!isValid_)
     {
         std::cerr << "SparseMatrix<Tp>::at(ULL i, ULL j) Error: matrix is not valid" << std::endl;
@@ -691,115 +777,63 @@ inline Scalar SparseMatrix<Tp>::at(ULL i, ULL j) const
     {
         return unCompressedMatrix_[i][j];
     }
-    else
+
+    for (ULL index = rowPointer_[i]; index < rowPointer_[i + 1]; ++index)
     {
-        // 判断是否存在第i行元素
-        if (rowPointer_[i] == rowPointer_[i + 1])   // 该行不存在元素，无法设置
+        if (colIndexs_[index] == j)
         {
-            std::cerr << "SparseMatrix<Tp>::at(ULL i, ULL j) Error: row " << i << " is empty" << std::endl;
-            throw std::invalid_argument("row " + std::to_string(i) + " is empty");
+            return values_[index];
         }
-
-        // 寻找第j列元素
-        for (ULL index = rowPointer_[i]; index < rowPointer_[i + 1]; ++index)
-        {
-            if (colIndexs_[index] == j)
-            {
-                return values_[index];
-            }
-        }
-
-        // 若未找到则返回0
-        return Scalar(0);
     }
+
+    return Scalar{};
 }
+
 
 template<typename Tp>
 inline Scalar& SparseMatrix<Tp>::operator()(ULL i, ULL j)
 {
-    // 判断矩阵是否有效
-    if (!isValid_)
-    {
-        std::cerr << "SparseMatrix<Tp>::operator()(ULL i, ULL j) Error: matrix is not valid" << std::endl;
-        throw std::invalid_argument("matrix is not valid");
-    }
-
-    // 判断索引是否越界
-    if (i >= size_ || j >= size_)
-    {
-        std::cerr << "SparseMatrix<Tp>::operator()(ULL i, ULL j) Error: index out of range" << std::endl;
-        throw std::out_of_range("index out of range");
-    }
-
-    if (!isCompressed_) // 未被压缩直接修改底层二维数组
+    // operator() 是快速可写访问接口：不重复做 isValid_/越界检查。
+    // 调用者需要保证 (i, j) 合法；需要安全只读访问时使用 at(i, j)。
+    if (!isCompressed_)
     {
         return unCompressedMatrix_[i][j];
     }
-    else
+
+    for (ULL index = rowPointer_[i]; index < rowPointer_[i + 1]; ++index)
     {
-        // 判断是否存在第i行元素
-        if (rowPointer_[i] == rowPointer_[i + 1])   // 该行不存在元素，无法设置
+        if (colIndexs_[index] == j)
         {
-            std::cerr << "SparseMatrix<Tp>::setValue(ULL i, ULL j, Tp value) Error: row " << i << " is empty" << std::endl;
-            throw std::invalid_argument("row " + std::to_string(i) + " is empty");
+            return values_[index];
         }
-
-        // 寻找第j列元素
-        for (ULL index = rowPointer_[i]; index < rowPointer_[i + 1]; ++index)
-        {
-            if (colIndexs_[index] == j)
-            {
-                return values_[index];
-            }
-        }
-
-        // 走到这说明不存在j列元素
-        std::cerr << "SparseMatrix<Tp>::operator()(ULL i, ULL j) Error: column " << j << " is not exist" << std::endl;
-        throw std::invalid_argument("column " + std::to_string(j) + " is not exist");
     }
+
+    // CSR 压缩矩阵不能通过引用返回一个不存在的结构零元。
+    // 这里保留最小失败路径，避免函数无返回值或错误写入虚假的零元。
+    throw std::out_of_range("SparseMatrix::operator(): sparse entry does not exist");
 }
 
 template<typename Tp>
 inline const Scalar& SparseMatrix<Tp>::operator()(ULL i, ULL j) const
 {
-    if (!isValid_)
-    {
-        std::cerr << "SparseMatrix<Tp>::operator()(ULL i, ULL j) Error: matrix is not valid" << std::endl;
-        throw std::invalid_argument("matrix is not valid");
-    }
+    // const operator() 是快速只读访问接口：不重复做 isValid_/越界检查。
+    // 对 CSR 中未显式存储的位置，返回只读静态零值。
+    static const Scalar zero{};
 
-    if (i >= size_ || j >= size_)
-    {
-        std::cerr << "SparseMatrix<Tp>::operator()(ULL i, ULL j) Error: index out of range" << std::endl;
-        throw std::out_of_range("index out of range");
-    }
-
-    if (!isCompressed_) // 未被压缩直接返回底层二维数组元素
+    if (!isCompressed_)
     {
         return unCompressedMatrix_[i][j];
     }
-    else    // 已被压缩只能返回非0元素，否则抛出异常
+
+    for (ULL index = rowPointer_[i]; index < rowPointer_[i + 1]; ++index)
     {
-        // 是否存在该行元素
-        if (rowPointer_[i] == rowPointer_[i + 1])
+        if (colIndexs_[index] == j)
         {
-            std::cerr << "SparseMatrix<Tp>::operator()(ULL i, ULL j) Error: row " << i << " is empty" << std::endl;
-            throw std::invalid_argument("row " + std::to_string(i) + " is empty");
+            return values_[index];
         }
-
-        // 遍历该行元素
-        for (ULL index = rowPointer_[i]; index < rowPointer_[i + 1]; ++index)
-        {
-            if (colIndexs_[index] == j)
-            {
-                return values_[index];
-            }
-        }
-
-        // 不存在该j列元素
-        std::cerr << "SparseMatrix<Tp>::operator()(ULL i, ULL j) Error: column " << j << " is not exist" << std::endl;
-        throw std::invalid_argument("column " + std::to_string(j) + " is not exist");
     }
+
+    return zero;
 }
 
 template<typename Tp>

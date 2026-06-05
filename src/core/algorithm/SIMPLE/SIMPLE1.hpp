@@ -54,6 +54,9 @@ namespace algorithm {
                 int pressureMaxIterations = 10000;
                 Scalar pressureTolerance = 1e-10;
 
+                // 并行
+                bool useParallel = false;
+
                 // SIMPLE 欠松弛
                 Scalar alphaU = 0.7;
                 Scalar alphaP = 0.3;
@@ -65,7 +68,7 @@ namespace algorithm {
 
                 // 非正交修正次数。
                 // 1 表示只做正交压力修正；大于 1 时会使用显式非正交修正。
-                int nNonOrthogonalCorrectors = 1;
+                int nNonOrthogonalCorrectors = 3;
 
                 // 对流格式
                 fvm::DivType divScheme = fvm::DivType::FUD;
@@ -329,16 +332,17 @@ namespace algorithm {
             computeRhieChowFaceVelocity();
 
             Residual residual;
+            std::vector<Scalar> oldP(mesh_->getCellNumber());
+            std::vector<Vector<Scalar>> oldU(mesh_->getCellNumber());
             // 外迭代
             for (int outerIter = 0; outerIter < options_.maxOuterIterations; ++outerIter) {
                 residual.iteration = outerIter + 1;
                 // 保留旧值
-                std::vector<Scalar> oldP = p_.getCellField().getData();
-                std::vector<Vector<Scalar>> oldU = U_.getCellField().getData();
+                oldP = p_.getCellField().getData();
+                oldU = U_.getCellField().getData();
 
                 // 计算动量方程
                 solverMomentumEqn();
-                U_.cellToFace();
                 // 计算Df
                 computeRAU();
 
@@ -346,7 +350,6 @@ namespace algorithm {
 
                 // 计算压力修正方程
                 solverPressureCorrEqn();
-                pCorr_.cellToFace();
 
                 // 用 p' 修正 Uf*
                 correctFaceVelocity();
@@ -591,36 +594,33 @@ namespace algorithm {
         }
         inline void SIMPLE::solverMomentumEqn() {
             // 负压力梯度
-            CellField<Vector<Scalar>> negGradPCell("-gradP", mesh_, Vector<Scalar>());
+            static CellField<Vector<Scalar>> negGradPCell("-gradP", mesh_, Vector<Scalar>());
             std::vector<Vector<Scalar>>& negGradPCellData = negGradPCell.getData();
             for (std::size_t cellId = 0; const Vector<Scalar>& gradP : p_.getCellGradientField().getData()) {
                 negGradPCellData[cellId] = -gradP;
                 ++cellId;
             }
-            // 内迭代(适应第二类边界条件)
-            for (int i = 0; i < options_.innerMaxIterations; ++i) {
-                momentumEqn_.clear();
-                // 对流项，扩散项，源项
-                fvm::Div(momentumEqn_, rho_, U_, Uf_, options_.divScheme);                 // 对流项
-                fvm::Laplacian(momentumEqn_, mu_, U_);                   // 扩散项
-                fvm::Source(momentumEqn_, negGradPCell);           // 源项
+            momentumEqn_.clear();
+            // 对流项，扩散项，源项
+            fvm::Div(momentumEqn_, rho_, U_, Uf_, options_.divScheme);                 // 对流项
+            fvm::Laplacian(momentumEqn_, mu_, U_);                   // 扩散项
+            fvm::Source(momentumEqn_, negGradPCell);           // 源项
 
-                // 求解器设置
-                Solver<Vector<Scalar>> momentumSolver(momentumEqn_,
-                                                      options_.momentumMethod,
-                                                      options_.momentumMaxIterations);
+            // 求解器设置
+            Solver<Vector<Scalar>> momentumSolver(momentumEqn_,
+                                                  options_.momentumMethod,
+                                                  options_.momentumMaxIterations);
 
-                momentumSolver.init(U_.getCellField().getData());
-                if (options_.alphaU < 1.0 - 1e-6) {
-                    momentumSolver.relax(options_.alphaU); // 松弛因子
-                }
-                momentumSolver.setTolerance(options_.momentumTolerance);
-                momentumSolver.solve(); // 求解
-                if (momentumSolver.Error() < options_.relativeTolerance) {
-                    std::cout << momentumSolver.Error() << std::endl;
-                    return;
-                }
+            momentumSolver.init(U_.getCellField().getData());
+            if (options_.alphaU < 1.0 - 1e-6) {
+                momentumSolver.relax(options_.alphaU); // 松弛因子
             }
+            momentumSolver.setTolerance(options_.momentumTolerance);
+            if (options_.useParallel) {
+                momentumSolver.setParallel();
+            }
+            momentumSolver.solve(); // 求解
+            U_.cellToFace();
         }
         inline void SIMPLE::solverPressureCorrEqn() {
             pCorr_.setValue(options_.pressureReferenceValue);
@@ -631,7 +631,12 @@ namespace algorithm {
             for (Scalar& divU : negDivUCellData) {
                 divU = -divU;
             }
-            for (int i = 0; i < 50; ++i) {
+
+            Solver<Scalar> pressureCorrSolver(pressureCorrEqn_,
+                                              options_.pressureMethod,
+                                              options_.pressureMaxIterations);
+
+            for (int i = 0; i < options_.nNonOrthogonalCorrectors; ++i) {
                 pressureCorrEqn_.clear();
                 // 扩散项, 源项
                 fvm::Laplacian(pressureCorrEqn_, rAU_.getFaceField(), pCorr_);
@@ -643,16 +648,14 @@ namespace algorithm {
                     pressureCorrEqn_(refCell, refCell) += penalty;
                     pressureCorrEqn_.addB(refCell, penalty * options_.pressureReferenceValue);
                 }
-                Solver<Scalar> pressureCorrSolver(pressureCorrEqn_,
-                                                  options_.pressureMethod,
-                                                  options_.pressureMaxIterations);
+   
                 pressureCorrSolver.init(pCorr_.getCellField().getData());
                 pressureCorrSolver.setTolerance(options_.pressureTolerance);
-                pressureCorrSolver.solve();
-                if (pressureCorrSolver.Error() < options_.relativeTolerance) {
-                    std::cout << pressureCorrSolver.Error() << std::endl;
-                    return;
+                if (options_.useParallel) {
+                    pressureCorrSolver.setParallel();
                 }
+                pressureCorrSolver.solve();
+                pCorr_.cellToFace();
             }
         }
         inline void SIMPLE::computeRAU() {
@@ -721,19 +724,19 @@ namespace algorithm {
             for (ULL faceId : mesh_->getInternalFaceIndexes())
             {
                 const Face& face = faces[faceId];
-                const ULL owner =face.getOwnerIndex();
-                const LL neighbor =face.getNeighborIndex();
+                const ULL owner = face.getOwnerIndex();
+                const LL neighbor = face.getNeighborIndex();
 
-                const Vector<Scalar> Sf =face.getArea() * face.getNormal();
-                const Scalar magSf2 =Sf.magnitudeSquared();
+                const Vector<Scalar> Sf = face.getArea() * face.getNormal();
+                const Scalar magSf2 = Sf.magnitudeSquared();
                 const Vector<Scalar> dPN =
                     cells[static_cast<ULL>(neighbor)].getCenter() -
                     cells[owner].getCenter();
-                const Scalar dPNMag =dPN.magnitude();
-                const Vector<Scalar> ePN =dPN / dPNMag;
+                const Scalar dPNMag = dPN.magnitude();
+                const Vector<Scalar> ePN = dPN / dPNMag;
                 const Scalar denom = std::abs(face.getNormal() & ePN);
-                const Scalar EfMag =face.getArea() / denom;
-                const Scalar alpha =interpolationAlphaInternal(faceId);
+                const Scalar EfMag = face.getArea() / denom;
+                const Scalar alpha = interpolationAlphaInternal(faceId);
 
                 const Scalar Df =
                     util::interpolate(
@@ -776,7 +779,9 @@ namespace algorithm {
             U_.cellToFace();
         }
         inline Scalar SIMPLE::computeContinuityResidual() const {
-            std::vector<Scalar> cellMassResidual(mesh_->getCellNumber(), Scalar());
+            static std::vector<Scalar> cellMassResidual(mesh_->getCellNumber());
+            std::fill(cellMassResidual.begin(), cellMassResidual.end(), Scalar());
+            const std::vector<Cell>& cells = mesh_->getCells();
             const std::vector<Face>& faces = mesh_->getFaces();
 
             Scalar totalAbsFlux = 0.0;

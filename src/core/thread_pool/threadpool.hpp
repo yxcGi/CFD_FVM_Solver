@@ -14,184 +14,169 @@
 static constexpr int DEFAULT_INIT_THREAD_NUM = 4;      // 默认初始线程数量
 static constexpr int MAX_TASK_QUEUE_NUM = 100;         // 最大任务队列数量
 
-class Thread
-{
-    using ThreadFunc = std::function<void()>;
-public:
-    Thread() = delete;
-    Thread(ThreadFunc threadFunc)       // 创建线程的时候传入线程函数
-        : id_(initId_++)
-        , threadFunc_(threadFunc)
-    {}
-public:
-    // 获取线程id
-    int getId()
-    {
-        return id_;
-    }
-
-    // 启动线程
-    void start()
-    {
-        // 执行线程函数
-        std::thread t{ threadFunc_ };
-        t.detach();
-    }
-
-private:
-    ThreadFunc threadFunc_;
-    int id_;
-    static int initId_;
-};
-inline int Thread::initId_ = 0;
-
 
 class ThreadPool
 {
 public:
+    ThreadPool() = default;
+
+    explicit ThreadPool(std::size_t threadNum,
+                        std::size_t maxTaskQueNum = MAX_TASK_QUEUE_NUM)
+    {
+        start(threadNum, maxTaskQueNum);
+    }
+
     ~ThreadPool()
     {
-        // 所有线程状态：阻塞 || 等待
-        stop_ = true;
-        notEmpty_.notify_all();  // 通知所有线程退出
-        std::unique_lock<std::mutex> lock(mtx_);
-        exit_.wait(lock, [this]() { return taskQue_.empty(); });
-        std::cout << "ThreadPool stoped." << std::endl;
+        shutdown();
     }
-public:
+
     static ThreadPool& getInstance()
     {
         static ThreadPool instance;
         return instance;
     }
-public:
-    // 提交任务
-    template<typename Func, typename... Args>
-    auto submitTask(Func&& func, Args&&... args) -> std::future<decltype(func(std::forward<Args>(args)...))>
+
+    void start(std::size_t threadNum = DEFAULT_INIT_THREAD_NUM,
+               std::size_t maxTaskQueNum = MAX_TASK_QUEUE_NUM)
     {
-        if (stop_)  // 若线程池已经停止
+        if (threadNum == 0)
         {
-            throw std::runtime_error("ThreadPool is stopped.");
+            threadNum = 1;
         }
 
-        // 加锁操作
+        std::unique_lock<std::mutex> lock(mtx_);
+
+        // 防止重复 start() 反复创建线程。
+        if (running_)
+        {
+            return;
+        }
+
+        running_ = true;
+        stopRequested_ = false;
+        maxTaskQueNum_ = std::max<std::size_t>(1, maxTaskQueNum);
+
+        workers_.reserve(threadNum);
+
+        for (std::size_t i = 0; i < threadNum; ++i)
+        {
+            workers_.emplace_back(&ThreadPool::workerLoop, this);
+        }
+    }
+
+    void shutdown() noexcept
+    {
         {
             std::unique_lock<std::mutex> lock(mtx_);
 
-            using ReType = decltype(func(std::forward<Args>(args)...));
-
-            // 不满才继续放入, 超时抛出异常
-            if (!notFull_.wait_for(
-                lock,
-                std::chrono::seconds(std::chrono::seconds(1)),
-                [this]() { return taskQue_.size() < maxTaskQueNum_; }))
+            if (!running_)
             {
-                std::cerr << "the taskQue is full, task will be discarded." << std::endl;
-                // 抛出异常
-                throw std::runtime_error("Task queue is full.");
+                return;
             }
 
-            // 打包任务
-            auto task =
-                std::make_shared<std::packaged_task<ReType()>>(
-                    std::bind(std::forward<Func>(func), std::forward<Args>(args)...));
+            stopRequested_ = true;
+        }
 
-            std::future<ReType> res = task->get_future();     // 获取future返回值
+        notEmpty_.notify_all();
 
-            // 任务通过lambda表达式转化为void()放入队列
-            taskQue_.emplace([task]() { (*task)(); });
-            notEmpty_.notify_all();
-            return res;
+        for (std::thread& worker : workers_)
+        {
+            if (worker.joinable())
+            {
+                worker.join();
+            }
+        }
+
+        {
+            std::unique_lock<std::mutex> lock(mtx_);
+            workers_.clear();
+            running_ = false;
+            stopRequested_ = false;
         }
     }
 
-    // 线程函数
-    void threadFunc()
+    template<typename Func, typename... Args>
+    auto submitTask(Func&& func, Args&&... args)
     {
-        while (true)      // 不断从任务队列中拿任务
+        using ReturnType = std::invoke_result_t<Func, Args...>;
+
+        auto boundTask = std::bind(
+            std::forward<Func>(func),
+            std::forward<Args>(args)...
+        );
+
+        auto packagedTask =
+            std::make_shared<std::packaged_task<ReturnType()>>(
+                std::move(boundTask)
+            );
+
+        std::future<ReturnType> result = packagedTask->get_future();
+
+        {
+            std::unique_lock<std::mutex> lock(mtx_);
+
+            if (!running_ || stopRequested_)
+            {
+                throw std::runtime_error("ThreadPool is not running.");
+            }
+
+            notFull_.wait(lock, [this]() {
+                return stopRequested_ || taskQue_.size() < maxTaskQueNum_;
+                          });
+
+            if (stopRequested_)
+            {
+                throw std::runtime_error("ThreadPool is stopped.");
+            }
+
+            taskQue_.emplace([packagedTask]() {
+                (*packagedTask)();
+                             });
+        }
+
+        notEmpty_.notify_one();
+        return result;
+    }
+
+private:
+    void workerLoop()
+    {
+        while (true)
         {
             std::function<void()> task;
-            // 加锁
+
             {
                 std::unique_lock<std::mutex> lock(mtx_);
-                // 不空才继续取任务
-                notEmpty_.wait(lock, [this]() { return !taskQue_.empty() || stop_; });
-                // 情况一：不空 没停 -> 继续取任务
-                // 情况二：空了 没停 -> 等待
-                // 情况三：不空 停了 -> 继续取任务
-                // 情况四：空了 停了 -> 返回
-                if (stop_ && taskQue_.empty())  // 如果线程池停止且任务队列为空，退出线程
+
+                notEmpty_.wait(lock, [this]() {
+                    return stopRequested_ || !taskQue_.empty();
+                               });
+
+                if (stopRequested_ && taskQue_.empty())
                 {
-                    exit_.notify_all();
                     return;
                 }
 
-                // 取任务
                 task = std::move(taskQue_.front());
                 taskQue_.pop();
-                idleThreadNum_--;
-                notFull_.notify_all();
-                if (!taskQue_.empty())      // 拿完如果任务队列仍有剩余，继续取任务
-                {
-                    notEmpty_.notify_all();
-                }
-            }       // 拿到任务就可以释放锁了
+            }
+
+            notFull_.notify_one();
             task();
-            idleThreadNum_++;
         }
-    }
-
-    void start(int initThreadNum = DEFAULT_INIT_THREAD_NUM, int maxTaskQueNum = MAX_TASK_QUEUE_NUM)     // 启动线程池并设置线程数量
-    {
-        initThreadNum_ = initThreadNum;     // 初始化线程数量
-        maxTaskQueNum_ = maxTaskQueNum;     // 设置最大任务队列数量
-        // 创建线程
-        for (int i = 0; i < initThreadNum_; ++i)
-        {
-            auto thread =
-                std::make_unique<Thread>(std::bind(&ThreadPool::threadFunc, this));
-            pool_.emplace(thread->getId(), std::move(thread));      // 将线程id和线程放入map中
-        }
-        // 启动线程
-        for (auto& thread : pool_)
-        {
-            thread.second->start();     // 启动线程
-            idleThreadNum_++;
-        }
-    }
-
-    void stop()
-    {
-        stop_ = true;
     }
 
 private:
-    ThreadPool()
-        : idleThreadNum_(0)
-        , initThreadNum_(0)
-        , maxTaskQueNum_(0)
-        , stop_(false)
-    {}
-    ThreadPool(const ThreadPool&) = delete;
-    ThreadPool(ThreadPool&&) = delete;
-    ThreadPool& operator=(const ThreadPool&) = delete;
-    ThreadPool& operator=(ThreadPool&&) = delete;
+    mutable std::mutex mtx_;
+    std::condition_variable notFull_;
+    std::condition_variable notEmpty_;
 
+    std::queue<std::function<void()>> taskQue_;
+    std::vector<std::thread> workers_;
 
-private:
-    std::queue<std::function<void()>> taskQue_;                 // 任务队列
-    std::unordered_map<int, std::unique_ptr<Thread>> pool_;     // 线程池, 包括记录线程id
-
-    std::mutex mtx_;                    // 互斥锁
-    std::condition_variable notFull_;   // 队列不满
-    std::condition_variable notEmpty_;  // 队列不空
-    std::condition_variable exit_;      // 线程退出
-
-    std::atomic_uint idleThreadNum_;    // 空闲线程数量（可变）
-    int initThreadNum_;                 // 初始线程数量
-    int maxTaskQueNum_;                 // 最大任务队列数量
-    
-    std::atomic_bool stop_;      // 线程是否停止
+    std::size_t maxTaskQueNum_{ MAX_TASK_QUEUE_NUM };
+    bool running_{ false };
+    bool stopRequested_{ false };
 };
-
 #endif // THREADPOOL_H_

@@ -102,13 +102,6 @@ inline Solver<Tp>::Solver(SparseMatrix<Tp>& matrix, Method method, int maxmaxIte
 template<typename Tp>
 inline void Solver<Tp>::init(const std::vector<Tp>& x0)
 {
-    // 不能重复初始化
-    if (isInitialized_)
-    {
-        std::cerr << "Solver<Tp>::init(const std::vector<Tp>& x0) Error: cannot initialize again" << std::endl;
-        throw std::runtime_error("cannot initialize again");
-    }
-
     // 检查长度是否合法
     if (x0.size() != equation_.size())
     {
@@ -225,7 +218,7 @@ inline Scalar Solver<Tp>::Error()
             temp1 += (x[i] - x0[i]).magnitudeSquared();
             temp2 += x[i].magnitudeSquared();
         }
-        
+
         if (temp1 == 0) // 第一次直接返回最大值
         {
             return std::numeric_limits<Scalar>::max();
@@ -353,159 +346,252 @@ inline bool Solver<Tp>::isValid() const
 template<typename Tp>
 inline void Solver<Tp>::ParallelSolve()
 {
-    // 根据电脑cpu核数，创建线程池个数为 cpu核数-1，主线程用于集中处理
-    ThreadPool* pool = &ThreadPool::getInstance();
-    int threadNum = std::thread::hardware_concurrency() - 1;
-    pool->start(threadNum);
-
-    // 给每个线程分配计算行的范围
-    ULL baseLineNum = equation_.size() / threadNum;
-    ULL remainLineNum = equation_.size() % threadNum;
-    std::vector<ULL> lineRange(threadNum + 1);  // 存储每个线程的行范围
-    for (int i = 0; i < threadNum; ++i)     // 给范围赋值
+    if (method_ != Solver::Method::Jacobi)
     {
-        if (i < remainLineNum)
+        std::cerr << "Solver<Tp>::ParallelSolve() Error: only Jacobi method is supported"
+            << std::endl;
+        throw std::invalid_argument("only Jacobi method is supported");
+    }
+
+    const ULL size = equation_.size();
+
+    const std::vector<ULL>& rowPointer = equation_.getRowPointer();
+    const std::vector<ULL>& columnIndex = equation_.getColIndexs();
+    const std::vector<Scalar>& values = equation_.getValues();
+    const std::vector<Tp>& b = equation_.getB();
+
+    // 保存求解前的初始解。
+    // 这样最后写回 Field 时，cellField_0 可以表示本次线性求解前的旧场。
+    const std::vector<Tp> oldSolution = x0_;
+
+    // 提前提取对角线，避免每次迭代都调用 equation_(i, i) 查找 CSR。
+    std::vector<Scalar> diag(size, Scalar{});
+
+    for (ULL row = 0; row < size; ++row)
+    {
+        if (rowPointer[row] == rowPointer[row + 1])
         {
-            lineRange[i] = (baseLineNum + 1) * i;
-            lineRange[i + 1] = (baseLineNum + 1) * (i + 1);
+            std::cerr << "Solver<Tp>::ParallelSolve() Error: row "
+                << row << " is an empty row" << std::endl;
+            throw std::runtime_error("matrix has an empty row");
+        }
+
+        bool hasDiagonal = false;
+
+        for (ULL index = rowPointer[row]; index < rowPointer[row + 1]; ++index)
+        {
+            if (columnIndex[index] == row)
+            {
+                diag[row] = values[index];
+                hasDiagonal = true;
+                break;
+            }
+        }
+
+        if (!hasDiagonal || std::abs(diag[row]) < static_cast<Scalar>(1.0e-30))
+        {
+            std::cerr << "Solver<Tp>::ParallelSolve() Error: invalid diagonal at row "
+                << row << std::endl;
+            throw std::runtime_error("invalid diagonal element");
+        }
+    }
+
+    // 线程数不是越多越好。
+    // Jacobi + CSR SpMV 通常受内存带宽限制，矩阵太小时不值得开太多线程。
+    const unsigned hardwareThreadNum = std::thread::hardware_concurrency();
+    const unsigned maxThreadNum = hardwareThreadNum > 1U ? hardwareThreadNum - 1U : 1U;
+
+    constexpr ULL MIN_ROWS_PER_TASK = 1024;
+
+    const ULL usefulThreadNum = std::max<ULL>(
+        1ULL,
+        (size + MIN_ROWS_PER_TASK - 1ULL) / MIN_ROWS_PER_TASK
+    );
+
+    const unsigned threadNum = static_cast<unsigned>(
+        std::min<ULL>(
+            static_cast<ULL>(maxThreadNum),
+            usefulThreadNum
+        )
+        );
+
+    if (threadNum <= 1U)
+    {
+        SerialSolve();
+        return;
+    }
+
+    struct Range
+    {
+        ULL begin{};
+        ULL end{};
+    };
+
+    std::vector<Range> ranges(threadNum);
+
+    const ULL baseLineNum = size / threadNum;
+    const ULL remainLineNum = size % threadNum;
+
+    ULL begin = 0;
+
+    for (unsigned tid = 0; tid < threadNum; ++tid)
+    {
+        const ULL lineNum = baseLineNum + (tid < remainLineNum ? 1ULL : 0ULL);
+
+        ranges[tid] = Range{
+            begin,
+            begin + lineNum
+        };
+
+        begin += lineNum;
+    }
+
+    ThreadPool& pool = ThreadPool::getInstance();
+
+    // 如果线程池已经启动，新的 ThreadPool::start() 会直接 return，不会重复创建线程。
+    pool.start(threadNum);
+
+    std::vector<std::future<void>> updateFutures(threadNum);
+    std::vector<std::future<Scalar>> residualFutures(threadNum);
+
+    // 第一阶段：Jacobi 更新。
+    //
+    // 每个线程只写自己的连续区间：
+    //
+    //     x_[rowBegin, rowEnd)
+    //
+    // 因此不会有多个线程写同一个 x_[i]。
+    auto updateRange = [&](ULL rowBegin, ULL rowEnd) {
+        for (ULL row = rowBegin; row < rowEnd; ++row)
+        {
+            Tp rhs = b[row];
+
+            // Jacobi 迭代：
+            //
+            //     x_i^{k+1}
+            //       =
+            //     ( b_i - sum_{j != i} A_ij x_j^k ) / A_ii
+            //
+            // 这里只读旧解 x0_，只写新解 x_。
+            for (ULL index = rowPointer[row]; index < rowPointer[row + 1]; ++index)
+            {
+                const ULL col = columnIndex[index];
+
+                if (col == row)
+                {
+                    continue;
+                }
+
+                rhs -= values[index] * x0_[col];
+            }
+
+            x_[row] = rhs / diag[row];
+        }
+        };
+
+    // 第二阶段：残差计算。
+    //
+    // 每个线程返回自己的局部最大残差，主线程最后做 max 归约。
+    // 不使用 mutex，也不使用 atomic。
+    auto residualRange = [&](ULL rowBegin, ULL rowEnd) -> Scalar {
+        Scalar localMaxResidual{};
+
+        if constexpr (std::is_same_v<Tp, Scalar>)
+        {
+            for (ULL row = rowBegin; row < rowEnd; ++row)
+            {
+                Scalar ax{};
+
+                for (ULL index = rowPointer[row]; index < rowPointer[row + 1]; ++index)
+                {
+                    ax += values[index] * x_[columnIndex[index]];
+                }
+
+                const Scalar residual = std::abs(b[row] - ax);
+                localMaxResidual = std::max(localMaxResidual, residual);
+            }
+        }
+        else if constexpr (std::is_same_v<Tp, Vector<Scalar>>)
+        {
+            for (ULL row = rowBegin; row < rowEnd; ++row)
+            {
+                Vector<Scalar> ax{};
+
+                for (ULL index = rowPointer[row]; index < rowPointer[row + 1]; ++index)
+                {
+                    ax += values[index] * x_[columnIndex[index]];
+                }
+
+                const Scalar residual = (b[row] - ax).magnitude();
+                localMaxResidual = std::max(localMaxResidual, residual);
+            }
         }
         else
         {
-            lineRange[i] = baseLineNum * i + remainLineNum;
-            lineRange[i + 1] = baseLineNum * (i + 1) + remainLineNum;
+            std::cerr << "Solver<Tp>::ParallelSolve() Error: unsupported Tp type"
+                << std::endl;
+            throw std::runtime_error("unsupported Tp type");
         }
-    }
 
-    ULL size = equation_.size();    // size
-    const std::vector<ULL>& rowPointer = equation_.getRowPointer();
-    const std::vector<Scalar>& values = equation_.getValues();
-    const std::vector<ULL>& columnIndex = equation_.getColIndexs();
-    const std::vector<Tp>& b = equation_.getB();
-    std::vector<Scalar> diag(size);
-    for (ULL i = 0; i < size; ++i)
+        return localMaxResidual;
+        };
+
+    for (int it = 0; it < maxIterationNum_; ++it)
     {
-        diag[i] = equation_(i, i);
-    }
-
-
-    if (method_ == Solver::Method::Jacobi)
-    {
-        // 创建线程函数
-        std::function<void(ULL, ULL)> paraSolve = [&](ULL start, ULL end) {
-            for (ULL i = start; i < end; ++i)
-            {
-                Tp sum{};
-
-                // 只遍历当前行的非0元素
-                for (ULL colId = rowPointer[i]; colId < rowPointer[i + 1]; ++colId)
-                {
-                    sum += values[colId] * x0_[columnIndex[colId]];
-                }
-                sum -= x0_[i] * diag[i];
-                // 计算当前步解
-                x_[i] = (b[i] - sum) / diag[i];
-            }
-            };
-
-        // std::function<Scalar(ULL, ULL)> paraSolveFunc = std::bind(
-        //     static_cast<Scalar(Solver<Tp>::*)(ULL, ULL)>(&Solver<Tp>::ParallelSolve),
-        //     this,
-        //     std::placeholders::_1,
-        //     std::placeholders::_2
-        // );
-
-        // 存储线程的返回值数组
-        std::vector<std::future<void>> results(threadNum);    // 记录每个线程返回的最大残差
-        // auto start = std::chrono::high_resolution_clock::now();
-        for (int it = 0; it < maxIterationNum_; ++it)
+        // 并行更新 x_。
+        for (unsigned tid = 0; tid < threadNum; ++tid)
         {
-            for (int i = 0; i < threadNum; ++i) // 给每个线程分配任务
-            {
-                results[i] = pool->submitTask(
-                    paraSolve,
-                    lineRange[i],
-                    lineRange[i + 1]
-                );
-            }
-            for (int i = 0; i < threadNum; ++i) // 等待线程完成
-            {
-                results[i].get();
-            }
-
-            x0_ = x_;   // 更新x0_
-
-            // 计算残差，采用最大残差
-            Scalar maxResidual = 0;
-            if constexpr (std::is_same_v<Tp, Scalar>)
-            {
-                for (ULL i = 0; i < size; ++i)
-                {
-                    Scalar residual{};
-                    for (ULL colId = rowPointer[i]; colId < rowPointer[i + 1]; ++colId)
-                    {
-                        residual += values[colId] * x_[columnIndex[colId]];
-                    }
-                    residual = std::abs(b[i] - residual);
-                    maxResidual = std::max(maxResidual, residual);
-                }
-
-            }
-            else if constexpr (std::is_same_v<Tp, Vector<Scalar>>)
-            {
-                for (ULL i = 0; i < size; ++i)
-                {
-                    Vector<Scalar> residual{};
-                    for (ULL colId = rowPointer[i]; colId < rowPointer[i + 1]; ++colId)
-                    {
-                        residual += values[colId] * x_[columnIndex[colId]];
-                    }
-                    residual = residual - b[i];
-                    maxResidual = std::max(maxResidual, residual.magnitude());
-                }
-            }
-            else
-            {
-                std::cerr << "Solver<Tp>::SerialSolve() Error: The type of Tp is not supported" << std::endl;
-                throw std::runtime_error("The type of Tp is not supported");
-            }
-
-            // 每N步输出一次
-            if ((it + 1) % outputInterval_ == 0 ||  // 保证后续输出的是整数次
-                it % outputInterval_ == 0)  // 第0次用
-            {
-                if (filed_)
-                {
-                    filed_->getCellField().getData() = x_;
-                    filed_->getCellField_0().getData() = x0_;
-                }
-                std::cout << "Iteration " << it + 1 << ": Max Residual = " << maxResidual << std::endl;
-            }
-
-            // 最大残差小于tolerance_，则结束迭代
-            if (maxResidual < tolerance_)
-            {
-                if (filed_)
-                {
-                    filed_->getCellField().getData() = x_;
-                    filed_->getCellField_0().getData() = x0_;
-                }
-                // std::cout << "Iteration " << it + 1 << ": Max Residual = " << maxResidual << "The solution has converged" << std::endl;
-
-                // auto end = std::chrono::high_resolution_clock::now();
-                // std::cout << "计算耗时：" << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
-
-                return;
-            }
+            updateFutures[tid] = pool.submitTask(
+                updateRange,
+                ranges[tid].begin,
+                ranges[tid].end
+            );
         }
-    }
-    else
-    {
-        std::cerr << "Solver<Tp>::SerialSolve() Error: The method is not supported" << std::endl;
-        throw std::invalid_argument("The method is not supported");
+
+        for (unsigned tid = 0; tid < threadNum; ++tid)
+        {
+            updateFutures[tid].get();
+        }
+
+        // 并行计算残差。
+        // 必须等所有 x_ 更新完成后才能计算 residual。
+        for (unsigned tid = 0; tid < threadNum; ++tid)
+        {
+            residualFutures[tid] = pool.submitTask(
+                residualRange,
+                ranges[tid].begin,
+                ranges[tid].end
+            );
+        }
+
+        Scalar maxResidual{};
+
+        for (unsigned tid = 0; tid < threadNum; ++tid)
+        {
+            maxResidual = std::max(maxResidual, residualFutures[tid].get());
+        }
+
+
+        if (maxResidual < tolerance_ || it == maxIterationNum_ - 1)
+        {
+            // 写回 Field。
+            //
+            // cellField    ：本次线性求解后的新解
+            // cellField_0  ：本次线性求解前的旧解
+            if (filed_ != nullptr)
+            {
+                filed_->getCellField().getData() = x_;
+                filed_->getCellField_0().getData() = oldSolution;
+            }
+
+            return;
+        }
+
+        // Jacobi 下一轮只需要交换新旧解。
+        // 不要写 x0_ = x_，那会整数组拷贝。
+        x0_.swap(x_);
     }
 }
-
-
 
 template<typename Tp>
 inline void Solver<Tp>::SerialSolve()
@@ -514,7 +600,7 @@ inline void Solver<Tp>::SerialSolve()
     ULL size = equation_.size();    // size
     const std::vector<ULL>& rowPointer = equation_.getRowPointer(); // 稀疏矩阵行首索引
     const std::vector<ULL>& columnIndex = equation_.getColIndexs(); // 与values对应的列索引
-    const std::vector<Scalar> values = equation_.getValues();   // 稀疏非0元素
+    const std::vector<Scalar>& values = equation_.getValues();   // 稀疏非0元素
     const std::vector<Tp>& b = equation_.getB();
 
 

@@ -1,28 +1,15 @@
-# 所有源文件
-file(GLOB_RECURSE CORE_SOURCES
+file(GLOB_RECURSE CORE_SOURCES CONFIGURE_DEPENDS
     Geometry/*.cpp
     Math/*.cpp
 )
 
-# 所有头文件
-file(GLOB_RECURSE CORE_HEADERS
-    Geometry/*.h
-    Geometry/*.hpp
-    Math/*.h
-    Math/*.hpp
-    Fields/*.h
-    Fields/*.hpp
-    FVM/*.hpp
-    thread_pool/*.hpp
-    algorithm/*.hpp
+add_library(core SHARED
+    ${CORE_SOURCES}
 )
 
-# 添加动态库
-add_library(core SHARED ${CORE_SOURCES})
-# 添加头文件
-target_include_directories(
-    core
+target_include_directories(core
     PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/Geometry
     ${CMAKE_CURRENT_SOURCE_DIR}/Math
     ${CMAKE_CURRENT_SOURCE_DIR}/Fields
@@ -31,4 +18,9 @@ target_include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/thread_pool
     ${CMAKE_CURRENT_SOURCE_DIR}/algorithm
     ${CMAKE_CURRENT_SOURCE_DIR}/algorithm/SIMPLE
+)
+
+target_compile_features(core
+    PUBLIC
+    cxx_std_17
 )

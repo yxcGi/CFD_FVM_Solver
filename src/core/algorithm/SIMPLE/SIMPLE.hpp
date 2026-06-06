@@ -1,5 +1,5 @@
-#ifndef SIMPLE_ALGORITHM_SIMPLE_HPP_
-#define SIMPLE_ALGORITHM_SIMPLE_HPP_
+#ifndef SIMPLE1_H_
+#define SIMPLE1_H_
 
 #include <algorithm>
 #include <cmath>
@@ -18,142 +18,350 @@
 #include "Solver.hpp"
 #include "SparseMatrix.hpp"
 #include "Vector.hpp"
+#include "Gradient.hpp"
+#include "Divergence.hpp"
+#include "interpolation.hpp"
+#include "Source.hpp"
 
-namespace simple {
+namespace algorithm {
+    namespace simple {
+        class SIMPLE {
+            using ULL = unsigned long long;
+            using LL = long long;
+            using Scalar = double;
+        public:
+            /**
+             * @brief SIMPLE算法参数设置
+             */
+            struct Options {
+                // SIMPLE 外迭代控制
+                int maxOuterIterations = 500;
+                Scalar convergenceTolerance = 1e-8;
+                int logInterval = 20;
 
-    class SIMPLE {
-    public:
-        using ULL = unsigned long long;
-        using LL = long long;
+                // 第二类边界条件内迭代
+                int innerMaxIterations = 5000;
+                Scalar relativeTolerance = 1e-6;
 
-        struct Options {
-            // SIMPLE 外迭代控制
-            int maxOuterIterations = 500;
-            Scalar convergenceTolerance = 1e-8;
-            int logInterval = 20;
+                // 动量方程内部迭代
+                int momentumMaxIterations = 5000;
+                Scalar momentumTolerance = 1e-10;
+                Solver<Vector<Scalar>>::Method momentumMethod =
+                    Solver<Vector<Scalar>>::Method::Jacobi;
+                Solver<Scalar>::Method pressureMethod =
+                    Solver<Scalar>::Method::Jacobi;
 
-            // 动量方程内部迭代
-            int momentumMaxIterations = 5000;
-            Scalar momentumTolerance = 1e-10;
-            Solver<Vector<Scalar>>::Method momentumMethod =
-                Solver<Vector<Scalar>>::Method::Jacobi;
+                // 压力修正方程内部迭代
+                int pressureMaxIterations = 10000;
+                Scalar pressureTolerance = 1e-10;
 
-            // 压力修正方程内部迭代
-            int pressureMaxIterations = 10000;
-            Scalar pressureTolerance = 1e-10;
+                // 并行
+                bool useParallel = false;
 
-            // SIMPLE 欠松弛
-            Scalar alphaU = 0.7;
-            Scalar alphaP = 0.3;
+                // SIMPLE 欠松弛
+                Scalar alphaU = 0.7;
+                Scalar alphaP = 0.3;
 
-            // 压力参考
-            ULL pressureReferenceCell = 0;
-            Scalar pressureReferenceValue = 0.0;
-            Scalar pressureReferencePenalty = 1e20;
+                // 压力参考
+                ULL pressureReferenceCell = 0;
+                Scalar pressureReferenceValue = 0.0;
+                Scalar pressureReferencePenalty = 1e20;
 
-            // 非正交修正次数。
-            // 1 表示只做正交压力修正；大于 1 时会使用显式非正交修正。
-            int nNonOrthogonalCorrectors = 1;
+                // 非正交修正次数。
+                // 1 表示只做正交压力修正；大于 1 时会使用显式非正交修正。
+                int nNonOrthogonalCorrectors = 3;
 
-            // 对流格式
-            fvm::DivType divScheme = fvm::DivType::FUD;
+                // 对流格式
+                fvm::DivType divScheme = fvm::DivType::FUD;
 
-            // 动量方程压力梯度源项系数。
-            // 如果 p 是运动压力 p/rho，通常取 1。
-            // 如果你传入的是物理压力，同时动量方程用的是 rho*U*U 和 mu，则也可取 1。
-            Scalar pressureGradientCoefficient = 1.0;
+                // 是否使用 Rhie-Chow 修正面通量
+                bool useRhieChow = true;
 
-            // 是否使用 Rhie-Chow 修正面通量
-            bool useRhieChow = true;
 
-            // 是否把修正后的质量通量投影回 U 的面场法向分量。
-            // 这样下一次 fvm::Div() 用到的 FaceField<Vector> 与 SIMPLE 通量一致。
-            bool projectFluxToFaceVelocity = true;
+                // 压力修正边界 p'=0 的 patch 名称。
+                // 比如压力出口可填 {"outlet"}。
+                // 未列出的边界默认按 dp'/dn=0 处理。
+                std::vector<std::string> fixedPressurePatches;
+            };
 
-            // 压力修正边界 p'=0 的 patch 名称。
-            // 比如压力出口可填 {"outlet"}。
-            // 未列出的边界默认按 dp'/dn=0 处理。
-            std::vector<std::string> fixedPressurePatches;
-        };
+            /**
+             * @brief SIMPLE 算法残差收敛信息
+             */
+            struct Residual {
+                int iteration = 0;
+                Scalar continuity = std::numeric_limits<Scalar>::max();
+                Scalar velocity = std::numeric_limits<Scalar>::max();
+                Scalar pressure = std::numeric_limits<Scalar>::max();
+                // Scalar pressureEquation = std::numeric_limits<Scalar>::max();
 
-        struct Residual {
-            int iteration = 0;
-            Scalar continuity = std::numeric_limits<Scalar>::max();
-            Scalar velocity = std::numeric_limits<Scalar>::max();
-            Scalar pressure = std::numeric_limits<Scalar>::max();
-            Scalar pressureEquation = std::numeric_limits<Scalar>::max();
+                bool converged(Scalar tolerance) const {
+                    return continuity < tolerance &&
+                        velocity < tolerance &&
+                        pressure < tolerance;
+                }
+            };
 
-            bool converged(Scalar tolerance) const {
-                return continuity < tolerance &&
-                    velocity < tolerance &&
-                    pressure < tolerance;
-            }
-        };
+            /**
+             * @brief 构造函数，仅支持有参构造
+             * @param U 初始速度场
+             * @param p 初始压力场
+             * @param rho 密度
+             * @param mu 粘度
+             */
+            SIMPLE(Field<Vector<Scalar>>& U,
+                   Field<Scalar>& p,
+                   FaceField<Scalar>& rho,
+                   FaceField<Scalar>& mu);
 
-    public:
-        SIMPLE(
-            Field<Vector<Scalar>> &U,
-            Field<Scalar> &p,
-            FaceField<Scalar> &rho,
-            FaceField<Scalar> &gamma
-        );
+            /**
+             * @brief 构造函数，仅支持有参构造
+             * @param U 初始速度场
+             * @param p 初始压力场
+             * @param rho 密度
+             * @param mu 粘度
+             * @param options SIMPLE 算法参数
+             */
+            SIMPLE(Field<Vector<Scalar>>& U,
+                   Field<Scalar>& p,
+                   FaceField<Scalar>& rho,
+                   FaceField<Scalar>& mu,
+                   const Options& options);
 
-        SIMPLE(
-            Field<Vector<Scalar>> &U,
-            Field<Scalar> &p,
-            FaceField<Scalar> &rho,
-            FaceField<Scalar> &gamma,
-            const Options &options
-        );
+            SIMPLE() = delete;
+            SIMPLE(const SIMPLE&) = delete;
+            SIMPLE(SIMPLE&&) = delete;
+            SIMPLE& operator=(const SIMPLE&) = delete;
+            SIMPLE& operator=(SIMPLE&&) = delete;
 
-        Residual solve() {
-            // 初始插值，保证 U、p 的面场和梯度场有效。
+        public:
+            /**
+             * @brief 运行 SIMPLE 算法
+             */
+            void solve();
+
+        private:
+            /**
+             * @brief 检查输入场是否合法
+             */
+            void isValidationInput();
+
+            /**
+             * @brief 检查算法参数是否合法
+             */
+            void isValidationOptions();
+
+            /**
+             * @brief 初始化 rAU_, 设置初始场值，并设置边界条件
+             */
+            void initializeRAU();
+
+            /**
+             * @brief 线性插值系数
+             * @param faceId 面ID
+             * @return
+             */
+            Scalar interpolationAlphaInternal(ULL faceId) const;
+
+            /**
+             * @brief grad(p)_f^face & Sf 计算辅助函数
+             * @param internalFaceId 面ID
+             * @param pOwner 主单元压力
+             * @param pNeighbor 邻单元压力
+             * @param gradPF 面压力梯度
+             * @return
+             */
+            Scalar faceNormalPressureGradientDotSf(ULL internalFaceId,
+                                                   Scalar pOwner,
+                                                   Scalar pNeighbor,
+                                                   const Vector<Scalar>& gradPF) const;
+            /**
+             * @brief 通过Rhie-Chow插值计算面速度Uf_
+             */
+            void computeRhieChowFaceVelocity();
+
+            /**
+             * @brief 计算动量方程矩阵
+             */
+            void solverMomentumEqn();
+
+            /**
+             * @brief 计算压力修正方程矩阵
+             */
+            void solverPressureCorrEqn();
+
+            /**
+             * @brief 计算 rAU_ = V / a_P
+             */
+            void computeRAU();
+
+            /**
+             * @brief 初始化压力修正场 pCorr_
+             */
+            void initializepCorr();
+
+            /**
+             * @brief 初始化固定压力面和边界条件
+             */
+            void initializeFixedPressureFaces();
+
+            /**
+             * @brief 修正计算压力修正值后修正Uf_
+             */
+            void correctFaceVelocity();
+
+            /**
+             * @brief 修正压力
+             */
+            void correctPressure();
+
+            /**
+             * @brief 修正速度
+             */
+            void correctVelocity();
+
+            /**
+             * @brief 计算质量守恒
+             */
+            Scalar computeContinuityResidual() const;
+
+            /**
+             * @brief 计算压力残差
+             * @param current 本部场
+             * @param old 上一步场
+             * @return 残差
+             */
+            Scalar computeRelativeChange(const std::vector<Scalar>& current,
+                                         const std::vector<Scalar>& old) const;
+
+            /**
+             * @brief 计算速度残差
+             * @param current 本部场
+             * @param old 上一步场
+             * @return 残差
+             */
+            Scalar computeRelativeChange(const std::vector<Vector<Scalar>>& current,
+                                         const std::vector<Vector<Scalar>>& old) const;
+
+        private:
+            static constexpr Scalar SMALL = 1e-30;
+
+            // SIMPLE 算法参数
+            Options options_;
+
+            // 各种场
+            Field<Vector<Scalar>>& U_;      // 速度场
+            Field<Scalar>& p_;              // 压力场
+            FaceField<Scalar>& rho_;        // 密度
+            FaceField<Scalar>& mu_;         // 粘度
+
+            Mesh* mesh_;                    // 网格
+
+            Field<Scalar> rAU_;             // rAU = V / a_P   压力修正方程扩散系数
+            FaceField<Vector<Scalar>> Uf_;  // 面场速度, 使用Rhie-Chow才启用
+            Field<Scalar> pCorr_;           // 压力修正场
+
+            // 方程组
+            SparseMatrix<Vector<Scalar>> momentumEqn_;  // 动量方程矩阵
+            SparseMatrix<Scalar> pressureCorrEqn_;      // 压力修正方程矩阵
+
+            std::vector<bool> fixedPressureFace_;       // 固定压力面
+        };  // class SIMPLE
+
+
+
+
+    #pragma region 实现
+        inline SIMPLE::SIMPLE(Field<Vector<Scalar>>& U,
+                              Field<Scalar>& p,
+                              FaceField<Scalar>& rho,
+                              FaceField<Scalar>& mu)
+            : options_(SIMPLE::Options())
+            , U_(U)
+            , p_(p)
+            , rho_(rho)
+            , mu_(mu)
+            , mesh_(U.getMesh())
+            , rAU_("rAU", mesh_)
+            , Uf_("Uf", mesh_)
+            , pCorr_("pCorr", mesh_)
+            , momentumEqn_(mesh_)
+            , pressureCorrEqn_(mesh_)
+            , fixedPressureFace_(mesh_->getFaceNumber(), false)
+        {
+            // 检查参数是否合理
+            isValidationInput();
+
+            // 初始化 rAU_, pCorr_
+            initializeRAU();
+            initializepCorr();
+        }
+
+        inline SIMPLE::SIMPLE(Field<Vector<Scalar>>& U,
+                              Field<Scalar>& p,
+                              FaceField<Scalar>& rho,
+                              FaceField<Scalar>& mu,
+                              const Options& options)
+            : options_(options)
+            , U_(U)
+            , p_(p)
+            , rho_(rho)
+            , mu_(mu)
+            , mesh_(U.getMesh())
+            , rAU_("rAU", mesh_)
+            , Uf_("Uf", mesh_)
+            , pCorr_("pCorr", mesh_)
+            , momentumEqn_(mesh_)
+            , pressureCorrEqn_(mesh_)
+            , fixedPressureFace_(mesh_->getFaceNumber(), false)
+        {
+            // 检查参数是否合理
+            isValidationInput();
+            // 检查算法参数是否合理
+            isValidationOptions();
+
+            // 初始化 rAU_, pCorr_
+            initializeRAU();
+            initializepCorr();
+        }
+    #pragma region solver
+        inline void SIMPLE::solve() {
+            // 先插值 速度/压力 面场
             U_.cellToFace();
             p_.cellToFace();
 
-            computeRhieChowFlux();
-
-            if (options_.projectFluxToFaceVelocity) {
-                projectFluxToUFaceField();
-            }
+            // 采用Rhie-Chow插值计算面场速度Uf_
+            computeRhieChowFaceVelocity();
 
             Residual residual;
-
-            for (int outerIter = 0;
-                 outerIter < options_.maxOuterIterations;
-                 ++outerIter) {
+            std::vector<Scalar> oldP(mesh_->getCellNumber());
+            std::vector<Vector<Scalar>> oldU(mesh_->getCellNumber());
+            // 外迭代
+            for (int outerIter = 0; outerIter < options_.maxOuterIterations; ++outerIter) {
                 residual.iteration = outerIter + 1;
+                // 保留旧值
+                oldP = p_.getCellField().getData();
+                oldU = U_.getCellField().getData();
 
-                const std::vector<Vector<Scalar>> oldU =
-                    U_.getCellField().getData();
-                const std::vector<Scalar> oldP =
-                    p_.getCellField().getData();
+                // 计算动量方程
+                solverMomentumEqn();
+                // 计算Df
+                computeRAU();
 
-                solveMomentumEquation();
+                computeRhieChowFaceVelocity();
 
-                // 动量方程求出 U* 后，重新计算 U* 面场和 p 梯度。
-                U_.cellToFace();
-                p_.cellToFace();
+                // 计算压力修正方程
+                solverPressureCorrEqn();
 
-                computeRhieChowFlux();
+                // 用 p' 修正 Uf*
+                correctFaceVelocity();
 
-                residual.pressureEquation = solvePressureCorrectionEquation();
-
-                const std::vector<Vector<Scalar>> gradPCorr =
-                    computeScalarCellGradient(pCorr_.getCellField().getData());
-
+                // 修正压力, 速度
                 correctPressure();
-                correctVelocity(gradPCorr);
+                correctVelocity();
 
-                // pressure correction equation 已经修正了 phi_。
-                // 这里更新 U、p 的面场和梯度，再把 phi_ 投影回 U 面法向分量。
-                U_.cellToFace();
-                p_.cellToFace();
+                // Rhie-Chow插值
 
-                if (options_.projectFluxToFaceVelocity) {
-                    projectFluxToUFaceField();
-                }
-
+                // 计算残差
                 residual.continuity = computeContinuityResidual();
                 residual.velocity = computeRelativeChange(
                     U_.getCellField().getData(),
@@ -164,79 +372,58 @@ namespace simple {
                     oldP
                 );
 
+                // 打印输出
                 if (options_.logInterval > 0 &&
-                    ((outerIter + 1) % options_.logInterval == 0 ||
+                    ((outerIter + 1) % options_.logInterval == 0||
                      outerIter == 0 ||
-                     residual.converged(options_.convergenceTolerance))) {
+                     residual.converged(options_.convergenceTolerance)))
+                {
                     std::cout
                         << "SIMPLE outer iteration " << outerIter + 1
                         << ", continuity = " << residual.continuity
                         << ", U = " << residual.velocity
                         << ", p = " << residual.pressure
-                        << ", pEqn = " << residual.pressureEquation
+                        // << ", pEqn = " << residual.pressureEquation
                         << std::endl;
                 }
-
                 if (residual.converged(options_.convergenceTolerance)) {
                     break;
                 }
             }
-
-            return residual;
         }
 
-        const FaceField<Scalar> &flux() const {
-            return phi_;
-        }
 
-        FaceField<Scalar> &flux() {
-            return phi_;
-        }
-
-        const Field<Scalar> &pressureCorrection() const {
-            return pCorr_;
-        }
-
-        const std::vector<Scalar> &rAU() const {
-            return rAU_;
-        }
-
-    private:
-        void validateInput() const {
+        inline void SIMPLE::isValidationInput() {
             if (mesh_ == nullptr) {
-                throw std::runtime_error("SIMPLE Error: mesh pointer is null.");
+                std::cerr << "SIMPLE::SIMPLE: mesh is nullptr" << std::endl;
+                throw std::invalid_argument("mesh is nullptr");
             }
-
-            if (!mesh_->isValid()) {
-                throw std::runtime_error("SIMPLE Error: mesh is not valid.");
-            }
-
-            if (p_.getMesh() != mesh_ ||
-                rho_.getMesh() != mesh_ ||
-                gamma_.getMesh() != mesh_) {
-                throw std::runtime_error(
-                    "SIMPLE Error: U, p, rho, gamma must use the same mesh."
-                );
+            if (mesh_ != rho_.getMesh() ||
+                mesh_ != mu_.getMesh() ||
+                mesh_ != p_.getMesh())
+            {
+                std::cerr << "SIMPLE::SIMPLE: mesh is not equal" << std::endl;
+                throw std::invalid_argument("U_, rho_, mu_, p_ mesh must be equal");
             }
 
             if (!U_.isValid()) {
-                throw std::runtime_error("SIMPLE Error: U field is not valid.");
+                std::cerr << "SIMPLE::SIMPLE: U_ is not valid" << std::endl;
+                throw std::invalid_argument("U_ is not valid");
             }
-
             if (!p_.isValid()) {
-                throw std::runtime_error("SIMPLE Error: p field is not valid.");
+                std::cerr << "SIMPLE::SIMPLE: p_ is not valid" << std::endl;
+                throw std::invalid_argument("p_ is not valid");
             }
-
             if (!rho_.isValid()) {
-                throw std::runtime_error("SIMPLE Error: rho face field is not valid.");
+                std::cerr << "SIMPLE::SIMPLE: rho_ is not valid" << std::endl;
+                throw std::invalid_argument("rho_ is not valid");
             }
-
-            if (!gamma_.isValid()) {
-                throw std::runtime_error("SIMPLE Error: gamma face field is not valid.");
+            if (!mu_.isValid()) {
+                std::cerr << "SIMPLE::SIMPLE: mu_ is not valid" << std::endl;
+                throw std::invalid_argument("mu_ is not valid");
             }
         }
-
-        void validateOptions() const {
+        inline void SIMPLE::isValidationOptions() {
             if (options_.maxOuterIterations <= 0) {
                 throw std::runtime_error(
                     "SIMPLE Error: maxOuterIterations must be positive."
@@ -274,858 +461,42 @@ namespace simple {
                 );
             }
         }
-
-        void initializeFixedPressureFaces() {
-            if (options_.fixedPressurePatches.empty()) {
-                return;
-            }
-
-            std::unordered_set<std::string> patchNames(
-                options_.fixedPressurePatches.begin(),
-                options_.fixedPressurePatches.end()
-            );
-
-            const auto &patches = mesh_->getBoundaryPatches();
-
-            for (const std::string &name : patchNames) {
-                if (patches.find(name) == patches.end()) {
-                    throw std::runtime_error(
-                        "SIMPLE Error: fixed pressure patch \"" +
-                        name +
-                        "\" does not exist."
-                    );
-                }
-            }
-
-            for (const auto &[name, patch] : patches) {
-                if (patchNames.find(name) == patchNames.end()) {
+        inline void SIMPLE::initializeRAU() {
+            rAU_.setValue(Scalar());
+            // 遍历边界，设置边界条件
+            for (const auto& [name, patch] :
+                 mesh_->getBoundaryPatches())
+            {
+                // 跳过二维EMPTY边界
+                if (patch.getType() ==
+                    BoundaryPatch::BoundaryType::EMPTY) {
                     continue;
                 }
-
-                const ULL startFace = patch.getStartFace();
-                const ULL nFace = patch.getNFace();
-
-                for (ULL faceId = startFace;
-                     faceId < startFace + nFace;
-                     ++faceId) {
-                    fixedPressureFace_[faceId] = true;
-                }
+                rAU_.setBoundaryCondition(name, 0, 1, 0);
             }
+            rAU_.cellToFace();
         }
-
-        void solveMomentumEquation() {
-            momentumEqn_.clear();
-
-            // 对流项：进入矩阵左端。
-            fvm::Div(
-                momentumEqn_,
-                rho_,
-                U_,
-                U_.getFaceField(),
-                options_.divScheme
-            );
-
-            // 扩散项：按照你现有实现，进入矩阵左端。
-            // 这里 gamma 可以理解为 mu 或 nu，取决于你整体方程的量纲约定。
-            fvm::Laplacian(momentumEqn_, gamma_, U_);
-
-            addPressureGradientSource(momentumEqn_);
-
-            const std::vector<Vector<Scalar>> oldU =
-                U_.getCellField().getData();
-
-            if (options_.alphaU < 1.0) {
-                relaxMomentumEquation(momentumEqn_, oldU, options_.alphaU);
-            }
-
-            computeRAU(momentumEqn_);
-
-            Solver<Vector<Scalar>> solver(
-                momentumEqn_,
-                options_.momentumMethod,
-                options_.momentumMaxIterations
-            );
-
-            solver.init(U_.getCellField().getData());
-            solver.setTolerance(options_.momentumTolerance);
-            solver.solve();
-        }
-
-        void addPressureGradientSource(
-            SparseMatrix<Vector<Scalar>> &equation
-        ) {
-            const CellField<Vector<Scalar>> &gradP =
-                p_.getCellGradientField();
-
-            const std::vector<Cell> &cells = mesh_->getCells();
-
-            for (ULL cellId = 0;
-                 cellId < mesh_->getCellNumber();
-                 ++cellId) {
-                const Vector<Scalar> pressureSource =
-                    -options_.pressureGradientCoefficient *
-                    cells[cellId].getVolume() *
-                    gradP[cellId];
-
-                equation.addB(cellId, pressureSource);
-            }
-        }
-
-        void relaxMomentumEquation(
-            SparseMatrix<Vector<Scalar>> &equation,
-            const std::vector<Vector<Scalar>> &oldU,
-            Scalar alpha
-        ) {
-            for (ULL cellId = 0;
-                 cellId < mesh_->getCellNumber();
-                 ++cellId) {
-                const Scalar oldDiag = equation(cellId, cellId);
-
-                if (std::abs(oldDiag) < SMALL) {
-                    throw std::runtime_error(
-                        "SIMPLE Error: zero diagonal in momentum equation."
-                    );
-                }
-
-                const Scalar relaxedDiag = oldDiag / alpha;
-
-                equation.setValue(cellId, cellId, relaxedDiag);
-
-                equation.addB(
-                    cellId,
-                    (1.0 - alpha) * relaxedDiag * oldU[cellId]
-                );
-            }
-        }
-
-        void computeRAU(const SparseMatrix<Vector<Scalar>> &equation) {
-            const std::vector<Cell> &cells = mesh_->getCells();
-
-            for (ULL cellId = 0;
-                 cellId < mesh_->getCellNumber();
-                 ++cellId) {
-                const Scalar diag = equation.at(cellId, cellId);
-
-                if (std::abs(diag) < SMALL) {
-                    throw std::runtime_error(
-                        "SIMPLE Error: zero diagonal when computing rAU."
-                    );
-                }
-
-                // 这里 rAU_ 实际保存 D_P = V_P / a_P。
-                rAU_[cellId] = cells[cellId].getVolume() / diag;
-            }
-        }
-
-        Scalar solvePressureCorrectionEquation() {
-            std::vector<Scalar> &pCorr =
-                pCorr_.getCellField().getData();
-
-            std::fill(pCorr.begin(), pCorr.end(), Scalar{});
-            pCorr_.getCellField_0().getData() = pCorr;
-
-            Scalar pressureEquationResidual =
-                std::numeric_limits<Scalar>::max();
-
-            std::vector<Vector<Scalar>> gradPCorr(
-                mesh_->getCellNumber(),
-                Vector<Scalar>{}
-            );
-
-            for (int nonOrth = 0;
-                 nonOrth < options_.nNonOrthogonalCorrectors;
-                 ++nonOrth) {
-                const bool useExplicitNonOrth =
-                    options_.nNonOrthogonalCorrectors > 1;
-
-                assemblePressureCorrectionEquation(
-                    gradPCorr,
-                    useExplicitNonOrth
-                );
-
-                pressureEquationResidual = solveScalarEquationJacobi(
-                    pressureCorrEqn_,
-                    pCorr,
-                    options_.pressureMaxIterations,
-                    options_.pressureTolerance
-                );
-
-                pCorr_.getCellField().getData() = pCorr;
-                pCorr_.getCellField_0().getData() = pCorr;
-
-                gradPCorr = computeScalarCellGradient(pCorr);
-
-                if (nonOrth == options_.nNonOrthogonalCorrectors - 1) {
-                    correctFlux(gradPCorr, useExplicitNonOrth);
-                }
-            }
-
-            return pressureEquationResidual;
-        }
-
-        void assemblePressureCorrectionEquation(
-            const std::vector<Vector<Scalar>> &gradPCorr,
-            bool useExplicitNonOrth
-        ) {
-            pressureCorrEqn_.clear();
-
-            const std::vector<Face> &faces = mesh_->getFaces();
-            const std::vector<ULL> &internalFaceIndexes =
-                mesh_->getInternalFaceIndexes();
-            const std::vector<ULL> &boundaryFaceIndexes =
-                mesh_->getBoundaryFaceIndexes();
-
-            for (ULL faceId : internalFaceIndexes) {
-                if (isEmptyFace(faceId)) {
-                    continue;
-                }
-
-                const Face &face = faces[faceId];
-
-                const ULL owner = face.getOwnerIndex();
-                const LL neighbor = face.getNeighborIndex();
-
-                if (neighbor < 0) {
-                    continue;
-                }
-
-                const Scalar coeff = pressureCorrectionCoeffInternal(faceId);
-
-                pressureCorrEqn_.addValue(owner, owner, coeff);
-                pressureCorrEqn_.addValue(owner, static_cast<ULL>(neighbor), -coeff);
-
-                pressureCorrEqn_.addValue(static_cast<ULL>(neighbor),
-                                          static_cast<ULL>(neighbor),
-                                          coeff);
-                pressureCorrEqn_.addValue(static_cast<ULL>(neighbor), owner, -coeff);
-
-                Scalar explicitNonOrthFlux = 0.0;
-
-                if (useExplicitNonOrth) {
-                    explicitNonOrthFlux =
-                        pressureCorrectionNonOrthogonalFluxInternal(
-                            faceId,
-                            gradPCorr
-                        );
-                }
-
-                // 连续性：sum(phi + phi') = 0。
-                // 对 owner，phi 正方向为 owner -> neighbor。
-                const Scalar rhsFlux = phi_[faceId] + explicitNonOrthFlux;
-
-                pressureCorrEqn_.addB(owner, -rhsFlux);
-                pressureCorrEqn_.addB(static_cast<ULL>(neighbor), rhsFlux);
-            }
-
-            for (ULL faceId : boundaryFaceIndexes) {
-                if (isEmptyFace(faceId)) {
-                    continue;
-                }
-
-                const Face &face = faces[faceId];
-                const ULL owner = face.getOwnerIndex();
-
-                if (fixedPressureFace_[faceId]) {
-                    const Scalar coeff =
-                        pressureCorrectionCoeffBoundary(faceId);
-
-                    pressureCorrEqn_.addValue(owner, owner, coeff);
-                }
-
-                // 对 dp'/dn = 0 的边界，只修正内部通量，不修正边界通量。
-                // 对 p'=0 的压力边界，上面已加入边界压力修正系数。
-                pressureCorrEqn_.addB(owner, -phi_[faceId]);
-            }
-
-            applyPressureReference(pressureCorrEqn_);
-        }
-
-        void applyPressureReference(SparseMatrix<Scalar> &equation) {
-            const ULL refCell = options_.pressureReferenceCell;
-            const Scalar penalty = options_.pressureReferencePenalty;
-
-            equation.addValue(refCell, refCell, penalty);
-            equation.addB(
-                refCell,
-                penalty * options_.pressureReferenceValue
-            );
-        }
-
-        Scalar solveScalarEquationJacobi(
-            const SparseMatrix<Scalar> &equation,
-            std::vector<Scalar> &x,
-            int maxIterations,
-            Scalar tolerance
-        ) const {
-            const ULL size = equation.size();
-
-            if (x.size() != size) {
-                x.assign(size, Scalar{});
-            }
-
-            const std::vector<Scalar> &values = equation.getValues();
-            const std::vector<ULL> &colIndex = equation.getColIndexs();
-            const std::vector<ULL> &rowPtr = equation.getRowPointer();
-            const std::vector<Scalar> &b = equation.getB();
-
-            std::vector<Scalar> xOld = x;
-            std::vector<Scalar> xNew = x;
-
-            std::vector<Scalar> diag(size, Scalar{});
-
-            for (ULL row = 0; row < size; ++row) {
-                diag[row] = equation.at(row, row);
-
-                if (std::abs(diag[row]) < SMALL) {
-                    throw std::runtime_error(
-                        "SIMPLE Error: zero diagonal in scalar Jacobi solver."
-                    );
-                }
-            }
-
-            Scalar maxResidual = std::numeric_limits<Scalar>::max();
-
-            for (int iter = 0; iter < maxIterations; ++iter) {
-                for (ULL row = 0; row < size; ++row) {
-                    Scalar sum = 0.0;
-
-                    for (ULL id = rowPtr[row];
-                         id < rowPtr[row + 1];
-                         ++id) {
-                        const ULL col = colIndex[id];
-
-                        if (col == row) {
-                            continue;
-                        }
-
-                        sum += values[id] * xOld[col];
-                    }
-
-                    xNew[row] = (b[row] - sum) / diag[row];
-                }
-
-                maxResidual = 0.0;
-
-                for (ULL row = 0; row < size; ++row) {
-                    Scalar Ax = 0.0;
-
-                    for (ULL id = rowPtr[row];
-                         id < rowPtr[row + 1];
-                         ++id) {
-                        Ax += values[id] * xNew[colIndex[id]];
-                    }
-
-                    maxResidual =
-                        std::max(maxResidual, std::abs(b[row] - Ax));
-                }
-
-                xOld.swap(xNew);
-
-                if (maxResidual < tolerance) {
-                    break;
-                }
-            }
-
-            x = xOld;
-
-            return maxResidual;
-        }
-
-        void correctPressure() {
-            CellField<Scalar> &pCell = p_.getCellField();
-            CellField<Scalar> &pOld = p_.getCellField_0();
-            const CellField<Scalar> &pCorrCell = pCorr_.getCellField();
-
-            for (ULL cellId = 0;
-                 cellId < mesh_->getCellNumber();
-                 ++cellId) {
-                pCell[cellId] += options_.alphaP * pCorrCell[cellId];
-            }
-
-            pOld.getData() = pCell.getData();
-        }
-
-        void correctVelocity(
-            const std::vector<Vector<Scalar>> &gradPCorr
-        ) {
-            CellField<Vector<Scalar>> &UCell = U_.getCellField();
-            CellField<Vector<Scalar>> &UOld = U_.getCellField_0();
-
-            for (ULL cellId = 0;
-                 cellId < mesh_->getCellNumber();
-                 ++cellId) {
-                UCell[cellId] -= rAU_[cellId] * gradPCorr[cellId];
-            }
-
-            UOld.getData() = UCell.getData();
-        }
-
-        void correctFlux(
-            const std::vector<Vector<Scalar>> &gradPCorr,
-            bool useExplicitNonOrth
-        ) {
-            const std::vector<Face> &faces = mesh_->getFaces();
-            const std::vector<ULL> &internalFaceIndexes =
-                mesh_->getInternalFaceIndexes();
-            const std::vector<ULL> &boundaryFaceIndexes =
-                mesh_->getBoundaryFaceIndexes();
-
-            const CellField<Scalar> &pCorrCell =
-                pCorr_.getCellField();
-
-            for (ULL faceId : internalFaceIndexes) {
-                if (isEmptyFace(faceId)) {
-                    phi_.setValue(faceId, Scalar{});
-                    continue;
-                }
-
-                const Face &face = faces[faceId];
-
-                const ULL owner = face.getOwnerIndex();
-                const LL neighbor = face.getNeighborIndex();
-
-                if (neighbor < 0) {
-                    continue;
-                }
-
-                const Scalar coeff =
-                    pressureCorrectionCoeffInternal(faceId);
-
-                Scalar fluxCorrection =
-                    coeff *
-                    (pCorrCell[owner] -
-                     pCorrCell[static_cast<ULL>(neighbor)]);
-
-                if (useExplicitNonOrth) {
-                    fluxCorrection +=
-                        pressureCorrectionNonOrthogonalFluxInternal(
-                            faceId,
-                            gradPCorr
-                        );
-                }
-
-                phi_.setValue(faceId, phi_[faceId] + fluxCorrection);
-            }
-
-            for (ULL faceId : boundaryFaceIndexes) {
-                if (isEmptyFace(faceId)) {
-                    phi_.setValue(faceId, Scalar{});
-                    continue;
-                }
-
-                if (!fixedPressureFace_[faceId]) {
-                    continue;
-                }
-
-                const Face &face = faces[faceId];
-                const ULL owner = face.getOwnerIndex();
-
-                const Scalar coeff =
-                    pressureCorrectionCoeffBoundary(faceId);
-
-                phi_.setValue(
-                    faceId,
-                    phi_[faceId] + coeff * pCorrCell[owner]
-                );
-            }
-        }
-
-        void computeRhieChowFlux() {
-            const std::vector<Face> &faces = mesh_->getFaces();
-            const std::vector<ULL> &internalFaceIndexes =
-                mesh_->getInternalFaceIndexes();
-            const std::vector<ULL> &boundaryFaceIndexes =
-                mesh_->getBoundaryFaceIndexes();
-
-            const CellField<Vector<Scalar>> &UCell = U_.getCellField();
-            const FaceField<Vector<Scalar>> &UFace = U_.getFaceField();
-
-            const CellField<Scalar> &pCell = p_.getCellField();
-            const CellField<Vector<Scalar>> &gradP =
-                p_.getCellGradientField();
-
-            for (ULL faceId : internalFaceIndexes) {
-                if (isEmptyFace(faceId)) {
-                    phi_.setValue(faceId, Scalar{});
-                    continue;
-                }
-
-                const Face &face = faces[faceId];
-
-                const ULL owner = face.getOwnerIndex();
-                const LL neighbor = face.getNeighborIndex();
-
-                if (neighbor < 0) {
-                    continue;
-                }
-
-                const Vector<Scalar> Sf =
-                    face.getArea() * face.getNormal();
-
-                if (!options_.useRhieChow) {
-                    phi_.setValue(
-                        faceId,
-                        rho_[faceId] * (UFace[faceId] & Sf)
-                    );
-                    continue;
-                }
-
-                const Scalar alpha = interpolationAlphaInternal(faceId);
-
-                const Vector<Scalar> Uf =
-                    (1.0 - alpha) * UCell[owner] +
-                    alpha * UCell[static_cast<ULL>(neighbor)];
-
-                const Vector<Scalar> gradPF =
-                    (1.0 - alpha) * gradP[owner] +
-                    alpha * gradP[static_cast<ULL>(neighbor)];
-
-                const Scalar Df =
-                    (1.0 - alpha) * rAU_[owner] +
-                    alpha * rAU_[static_cast<ULL>(neighbor)];
-
-                const Scalar gradPFaceDotSf =
-                    faceNormalPressureGradientDotSf(
-                        faceId,
-                        pCell[owner],
-                        pCell[static_cast<ULL>(neighbor)],
-                        gradPF
-                    );
-
-                const Scalar massFlux =
-                    rho_[faceId] *
-                    (
-                        (Uf & Sf) +
-                        Df * ((gradPF & Sf) - gradPFaceDotSf)
-                        );
-
-                phi_.setValue(faceId, massFlux);
-            }
-
-            for (ULL faceId : boundaryFaceIndexes) {
-                if (isEmptyFace(faceId)) {
-                    phi_.setValue(faceId, Scalar{});
-                    continue;
-                }
-
-                const Face &face = faces[faceId];
-                const Vector<Scalar> Sf =
-                    face.getArea() * face.getNormal();
-
-                phi_.setValue(
-                    faceId,
-                    rho_[faceId] * (UFace[faceId] & Sf)
-                );
-            }
-        }
-
-        void projectFluxToUFaceField() {
-            FaceField<Vector<Scalar>> &UFace = U_.getFaceField();
-            const std::vector<Face> &faces = mesh_->getFaces();
-
-            for (ULL faceId = 0;
-                 faceId < mesh_->getFaceNumber();
-                 ++faceId) {
-                if (isEmptyFace(faceId)) {
-                    UFace.setValue(faceId, Vector<Scalar>{});
-                    continue;
-                }
-
-                const Scalar rhoF = rho_[faceId];
-
-                if (std::abs(rhoF) < SMALL) {
-                    continue;
-                }
-
-                const Face &face = faces[faceId];
-                const Vector<Scalar> normal = face.getNormal();
-                const Vector<Scalar> Sf = face.getArea() * normal;
-
-                const Scalar targetVolumeFlux = phi_[faceId] / rhoF;
-                const Scalar currentVolumeFlux = UFace[faceId] & Sf;
-
-                const Scalar normalVelocityCorrection =
-                    (targetVolumeFlux - currentVolumeFlux) /
-                    std::max(face.getArea(), SMALL);
-
-                UFace.setValue(
-                    faceId,
-                    UFace[faceId] + normalVelocityCorrection * normal
-                );
-            }
-        }
-
-        std::vector<Vector<Scalar>> computeScalarCellGradient(
-            const std::vector<Scalar> &scalarCellValue
-        ) const {
-            if (scalarCellValue.size() != mesh_->getCellNumber()) {
-                throw std::runtime_error(
-                    "SIMPLE Error: scalarCellValue size is inconsistent with mesh."
-                );
-            }
-
-            const std::vector<Cell> &cells = mesh_->getCells();
-            const std::vector<Face> &faces = mesh_->getFaces();
-
-            std::vector<Vector<Scalar>> grad(
-                mesh_->getCellNumber(),
-                Vector<Scalar>{}
-            );
-
-            for (ULL cellId = 0;
-                 cellId < mesh_->getCellNumber();
-                 ++cellId) {
-                const Cell &cell = cells[cellId];
-
-                Vector<Scalar> total{};
-
-                for (ULL faceId : cell.getFaceIndexes()) {
-                    if (isEmptyFace(faceId)) {
-                        continue;
-                    }
-
-                    const Face &face = faces[faceId];
-
-                    Scalar faceValue = 0.0;
-
-                    const ULL owner = face.getOwnerIndex();
-                    const LL neighbor = face.getNeighborIndex();
-
-                    if (neighbor >= 0) {
-                        const Scalar alpha =
-                            interpolationAlphaInternal(faceId);
-
-                        faceValue =
-                            (1.0 - alpha) * scalarCellValue[owner] +
-                            alpha * scalarCellValue[static_cast<ULL>(neighbor)];
-                    }
-                    else {
-                        if (fixedPressureFace_[faceId]) {
-                            faceValue = 0.0;
-                        }
-                        else {
-                            faceValue = scalarCellValue[owner];
-                        }
-                    }
-
-                    const Vector<Scalar> Sf =
-                        face.getArea() * face.getNormal();
-
-                    if (owner == cellId) {
-                        total += faceValue * Sf;
-                    }
-                    else {
-                        total -= faceValue * Sf;
-                    }
-                }
-
-                grad[cellId] = total / cell.getVolume();
-            }
-
-            return grad;
-        }
-
-        Scalar pressureCorrectionCoeffInternal(ULL faceId) const {
-            const std::vector<Face> &faces = mesh_->getFaces();
-            const std::vector<Cell> &cells = mesh_->getCells();
-
-            const Face &face = faces[faceId];
+        inline Scalar SIMPLE::interpolationAlphaInternal(ULL faceId) const
+        {
+            const std::vector<Face>& faces = mesh_->getFaces();
+            const std::vector<Cell>& cells = mesh_->getCells();
+
+            const Face& face = faces[faceId];
 
             const ULL owner = face.getOwnerIndex();
             const LL neighbor = face.getNeighborIndex();
 
             if (neighbor < 0) {
-                throw std::runtime_error(
-                    "SIMPLE Error: internal pressure coefficient requested on boundary face."
-                );
+                std::cerr << "SIMPLE::SIMPLE: neighbor is negative" << std::endl;
+                throw std::runtime_error("SIMPLE::SIMPLE: faceId must be internal faceId");
             }
 
-            const Vector<Scalar> d =
-                cells[static_cast<ULL>(neighbor)].getCenter() -
-                cells[owner].getCenter();
-
-            const Scalar distance = d.magnitude();
-
-            if (distance < SMALL) {
-                throw std::runtime_error(
-                    "SIMPLE Error: zero owner-neighbor distance."
-                );
-            }
-
-            const Vector<Scalar> e = d / distance;
-
-            const Scalar denom = std::abs(face.getNormal() & e);
-
-            if (denom < SMALL) {
-                throw std::runtime_error(
-                    "SIMPLE Error: bad non-orthogonal face geometry."
-                );
-            }
-
-            const Scalar EfMag = face.getArea() / denom;
-
-            const Scalar alpha = interpolationAlphaInternal(faceId);
-
-            const Scalar Df =
-                (1.0 - alpha) * rAU_[owner] +
-                alpha * rAU_[static_cast<ULL>(neighbor)];
-
-            return rho_[faceId] * Df * EfMag / distance;
-        }
-
-        Scalar pressureCorrectionCoeffBoundary(ULL faceId) const {
-            const std::vector<Face> &faces = mesh_->getFaces();
-            const std::vector<Cell> &cells = mesh_->getCells();
-
-            const Face &face = faces[faceId];
-
-            const ULL owner = face.getOwnerIndex();
-
-            const Vector<Scalar> d =
-                face.getCenter() -
-                cells[owner].getCenter();
-
-            const Scalar distance = d.magnitude();
-
-            if (distance < SMALL) {
-                throw std::runtime_error(
-                    "SIMPLE Error: zero cell-boundary distance."
-                );
-            }
-
-            const Vector<Scalar> e = d / distance;
-
-            const Scalar denom = std::abs(face.getNormal() & e);
-
-            if (denom < SMALL) {
-                throw std::runtime_error(
-                    "SIMPLE Error: bad boundary face geometry."
-                );
-            }
-
-            const Scalar EfMag = face.getArea() / denom;
-
-            return rho_[faceId] * rAU_[owner] * EfMag / distance;
-        }
-
-        Scalar pressureCorrectionNonOrthogonalFluxInternal(
-            ULL faceId,
-            const std::vector<Vector<Scalar>> &gradPCorr
-        ) const {
-            const std::vector<Face> &faces = mesh_->getFaces();
-            const std::vector<Cell> &cells = mesh_->getCells();
-
-            const Face &face = faces[faceId];
-
-            const ULL owner = face.getOwnerIndex();
-            const LL neighbor = face.getNeighborIndex();
-
-            if (neighbor < 0) {
-                return 0.0;
-            }
-
-            const Scalar alpha = interpolationAlphaInternal(faceId);
-
-            const Vector<Scalar> gradPF =
-                (1.0 - alpha) * gradPCorr[owner] +
-                alpha * gradPCorr[static_cast<ULL>(neighbor)];
-
-            const Scalar Df =
-                (1.0 - alpha) * rAU_[owner] +
-                alpha * rAU_[static_cast<ULL>(neighbor)];
-
-            const Vector<Scalar> d =
-                cells[static_cast<ULL>(neighbor)].getCenter() -
-                cells[owner].getCenter();
-
-            const Vector<Scalar> e = d.unitVector();
-
-            const Scalar denom = std::abs(face.getNormal() & e);
-
-            if (denom < SMALL) {
-                return 0.0;
-            }
-
-            const Vector<Scalar> Sf =
-                face.getArea() * face.getNormal();
-
-            const Scalar EfMag = face.getArea() / denom;
-            const Vector<Scalar> Ef = EfMag * e;
-            const Vector<Scalar> Tf = Sf - Ef;
-
-            return -rho_[faceId] * Df * (gradPF & Tf);
-        }
-
-        Scalar faceNormalPressureGradientDotSf(
-            ULL faceId,
-            Scalar pOwner,
-            Scalar pNeighbor,
-            const Vector<Scalar> &gradPF
-        ) const {
-            const std::vector<Face> &faces = mesh_->getFaces();
-            const std::vector<Cell> &cells = mesh_->getCells();
-
-            const Face &face = faces[faceId];
-
-            const ULL owner = face.getOwnerIndex();
-            const LL neighbor = face.getNeighborIndex();
-
-            if (neighbor < 0) {
-                return gradPF & (face.getArea() * face.getNormal());
-            }
-
-            const Vector<Scalar> d =
-                cells[static_cast<ULL>(neighbor)].getCenter() -
-                cells[owner].getCenter();
-
-            const Scalar distance = d.magnitude();
-
-            if (distance < SMALL) {
-                throw std::runtime_error(
-                    "SIMPLE Error: zero owner-neighbor distance."
-                );
-            }
-
-            const Vector<Scalar> e = d / distance;
-
-            const Scalar denom = std::abs(face.getNormal() & e);
-
-            if (denom < SMALL) {
-                throw std::runtime_error(
-                    "SIMPLE Error: bad face geometry in Rhie-Chow interpolation."
-                );
-            }
-
-            const Vector<Scalar> Sf =
-                face.getArea() * face.getNormal();
-
-            const Scalar EfMag = face.getArea() / denom;
-            const Vector<Scalar> Ef = EfMag * e;
-            const Vector<Scalar> Tf = Sf - Ef;
-
-            return ((pNeighbor - pOwner) / distance) * EfMag +
-                (gradPF & Tf);
-        }
-
-        Scalar interpolationAlphaInternal(ULL faceId) const {
-            const std::vector<Face> &faces = mesh_->getFaces();
-            const std::vector<Cell> &cells = mesh_->getCells();
-
-            const Face &face = faces[faceId];
-
-            const ULL owner = face.getOwnerIndex();
-            const LL neighbor = face.getNeighborIndex();
-
-            if (neighbor < 0) {
-                return 0.0;
-            }
-
-            const Vector<Scalar> &faceCenter = face.getCenter();
-            const Vector<Scalar> &ownerCenter = cells[owner].getCenter();
-            const Vector<Scalar> &neighborCenter =
+            const Vector<Scalar>& faceCenter = face.getCenter();
+            const Vector<Scalar>& ownerCenter = cells[owner].getCenter();
+            const Vector<Scalar>& neighborCenter =
                 cells[static_cast<ULL>(neighbor)].getCenter();
 
-            const Vector<Scalar> &normal = face.getNormal();
+            const Vector<Scalar>& normal = face.getNormal();
 
             const Scalar ownerDistance =
                 (faceCenter - ownerCenter) & normal;
@@ -1135,75 +506,320 @@ namespace simple {
             const Scalar denominator =
                 ownerDistance + neighborDistance;
 
-            if (std::abs(denominator) < SMALL) {
-                return 0.5;
-            }
-
             Scalar alpha = ownerDistance / denominator;
-
-            if (alpha < 0.0 || alpha > 1.0) {
-                alpha = 0.5;
-            }
 
             return alpha;
         }
+        inline Scalar SIMPLE::faceNormalPressureGradientDotSf(ULL internalFaceId, Scalar pOwner, Scalar pNeighbor, const Vector<Scalar>& gradPF) const {
+            const std::vector<Face>& faces = mesh_->getFaces();
+            const std::vector<Cell>& cells = mesh_->getCells();
 
-        Scalar computeContinuityResidual() const {
-            std::vector<Scalar> cellMassResidual(
-                mesh_->getCellNumber(),
-                Scalar{}
-            );
+            const Face& face = faces[internalFaceId];
+            const ULL owner = face.getOwnerIndex();
+            const LL neighbor = face.getNeighborIndex();
 
-            const std::vector<Face> &faces = mesh_->getFaces();
+            const Vector<Scalar> Sf = face.getNormal() * face.getArea();
+            const Vector<Scalar> d_PN = cells[neighbor].getCenter() - cells[owner].getCenter();
+            const Scalar distance = d_PN.magnitude();
+            const Vector<Scalar> e = d_PN / distance;
+            const Scalar denom = e & face.getNormal();
+            const Scalar Efmag = face.getArea() / denom;
 
-            Scalar totalAbsFlux = 0.0;
+            const Vector<Scalar> Ef = Efmag * e;
+            const Vector<Scalar> Tf = Sf - Ef;
 
-            for (ULL faceId = 0;
-                 faceId < mesh_->getFaceNumber();
-                 ++faceId) {
-                if (isEmptyFace(faceId)) {
-                    continue;
-                }
+            return (pNeighbor - pOwner) / distance * Efmag + (gradPF & Tf);
+        }
+        inline void SIMPLE::computeRhieChowFaceVelocity() {
+            Uf_.setValue(Vector<Scalar>()); // 初始化为0, 并启用场(isValid)
+            Uf_.getData() = U_.getFaceField().getData(); // 先初始化为 U_ 的面场值
 
-                const Face &face = faces[faceId];
+            const std::vector<Face>& faces = mesh_->getFaces();
+            const FaceField<Vector<Scalar>>& Uf = U_.getFaceField();
+            const CellField<Scalar>& pCell = p_.getCellField();
+            const CellField<Vector<Scalar>>& gradPCell = p_.getCellGradientField();
+            const CellField<Scalar>& rAUp = rAU_.getCellField();
+            const FaceField<Scalar>& rAUf = rAU_.getFaceField();
 
+            // 通过Rhie-Chow插值计算内部面的Uf_场值
+            for (ULL faceId : mesh_->getInternalFaceIndexes()) {
+                const Face& face = faces[faceId];
                 const ULL owner = face.getOwnerIndex();
                 const LL neighbor = face.getNeighborIndex();
 
-                const Scalar fluxValue = phi_[faceId];
+                const Vector<Scalar> Sf = face.getArea() * face.getNormal();
+                const Scalar magSf2 = Sf.magnitudeSquared();
+
+                // 插值权重：phi_f = (1-alpha) * phi_owner + alpha * phi_neighbor
+                const Scalar alpha = interpolationAlphaInternal(faceId);
+
+                // 插值得到面压力梯度
+                Vector<Scalar> gradPf =
+                    util::interpolate(gradPCell[owner],
+                                      gradPCell[neighbor],
+                                      interpolation::Scheme::LINEAR,
+                                      alpha);
+
+                // 面上的 D_f = V/a 插值
+                const Scalar Df =
+                    util::interpolate(rAUp[owner],
+                                      rAUp[neighbor],
+                                      interpolation::Scheme::LINEAR,
+                                      alpha);
+
+                // (grad p)_f^face · S_f 带非正交修正
+                const Scalar gradPFaceDotSf =
+                    faceNormalPressureGradientDotSf(faceId,
+                                                    pCell[owner],
+                                                    pCell[neighbor],
+                                                    gradPf);
+
+                // 体积流量修正 D_f * [gradPbar_f · S_f - (grad p)_f^face · S_f]
+                const Scalar VolumeFluxCorr =
+                    Df * ((gradPf & Sf) - gradPFaceDotSf);
+
+                // 速度修正量只沿 S_f 方向修正，即只改法向速度。
+                const Vector<Scalar> velocityCorrection =
+                    (VolumeFluxCorr / magSf2) * Sf;
+
+                // Uf = Uf + velocityCorrection
+                const Vector<Scalar> URhieChow =
+                    Uf[faceId] + velocityCorrection;
+                Uf_[faceId] = URhieChow;
+            }
+
+            // 边界面
+            for (ULL faceId : mesh_->getBoundaryFaceIndexes()) {
+                Uf_[faceId] = Uf[faceId];
+            }
+        }
+        inline void SIMPLE::solverMomentumEqn() {
+            // 负压力梯度
+            static CellField<Vector<Scalar>> negGradPCell("-gradP", mesh_, Vector<Scalar>());
+            std::vector<Vector<Scalar>>& negGradPCellData = negGradPCell.getData();
+            for (std::size_t cellId = 0; const Vector<Scalar>& gradP : p_.getCellGradientField().getData()) {
+                negGradPCellData[cellId] = -gradP;
+                ++cellId;
+            }
+            momentumEqn_.clear();
+            // 对流项，扩散项，源项
+            fvm::Div(momentumEqn_, rho_, U_, Uf_, options_.divScheme);                 // 对流项
+            fvm::Laplacian(momentumEqn_, mu_, U_);                   // 扩散项
+            fvm::Source(momentumEqn_, negGradPCell);           // 源项
+
+            // 求解器设置
+            Solver<Vector<Scalar>> momentumSolver(momentumEqn_,
+                                                  options_.momentumMethod,
+                                                  options_.momentumMaxIterations);
+
+            momentumSolver.init(U_.getCellField().getData());
+            if (options_.alphaU < 1.0 - 1e-6) {
+                momentumSolver.relax(options_.alphaU); // 松弛因子
+            }
+            momentumSolver.setTolerance(options_.momentumTolerance);
+            if (options_.useParallel) {
+                momentumSolver.setParallel();
+            }
+            momentumSolver.solve(); // 求解
+            U_.cellToFace();
+        }
+        inline void SIMPLE::solverPressureCorrEqn() {
+            pCorr_.setValue(options_.pressureReferenceValue);
+            // 计算负的速度散度
+            CellField<Scalar> negDivUCell("-divU", mesh_, Scalar());
+            std::vector<Scalar>& negDivUCellData = negDivUCell.getData();
+            negDivUCellData = divergence(Uf_).getData();
+            for (Scalar& divU : negDivUCellData) {
+                divU = -divU;
+            }
+
+            Solver<Scalar> pressureCorrSolver(pressureCorrEqn_,
+                                              options_.pressureMethod,
+                                              options_.pressureMaxIterations);
+
+            for (int i = 0; i < options_.nNonOrthogonalCorrectors; ++i) {
+                pressureCorrEqn_.clear();
+                // 扩散项, 源项
+                fvm::Laplacian(pressureCorrEqn_, rAU_.getFaceField(), pCorr_);
+                fvm::Source(pressureCorrEqn_, negDivUCell);
+                // 若没有压力出口则使用参考点的压力，施加惩罚项
+                if (options_.fixedPressurePatches.empty()) {
+                    const ULL refCell = options_.pressureReferenceCell;
+                    const Scalar penalty = options_.pressureReferencePenalty;
+                    pressureCorrEqn_(refCell, refCell) += penalty;
+                    pressureCorrEqn_.addB(refCell, penalty * options_.pressureReferenceValue);
+                }
+   
+                pressureCorrSolver.init(pCorr_.getCellField().getData());
+                pressureCorrSolver.setTolerance(options_.pressureTolerance);
+                if (options_.useParallel) {
+                    pressureCorrSolver.setParallel();
+                }
+                pressureCorrSolver.solve();
+                pCorr_.cellToFace();
+            }
+        }
+        inline void SIMPLE::computeRAU() {
+            std::vector<Scalar>& rAUCellFieldData = rAU_.getCellField().getData();
+            const std::vector<Cell>& cells = mesh_->getCells();
+
+            for (ULL cellId = 0; cellId < mesh_->getCellNumber(); ++cellId) {
+                rAUCellFieldData[cellId] = cells[cellId].getVolume() / momentumEqn_(cellId, cellId);
+            }
+            rAU_.cellToFace();
+        }
+        inline void SIMPLE::initializepCorr() {
+            pCorr_.initialize();
+            initializeFixedPressureFaces();
+            pCorr_.cellToFace();
+        }
+        inline void SIMPLE::initializeFixedPressureFaces() {
+            std::unordered_set<std::string> patchNames(
+                options_.fixedPressurePatches.begin(),
+                options_.fixedPressurePatches.end()
+            );
+
+            const auto& patches = mesh_->getBoundaryPatches();
+
+            // 确保所有给定的 patch 名称都存在于网格边界中
+            if (!options_.fixedPressurePatches.empty()) {
+                for (const std::string& name : patchNames) {
+                    if (patches.find(name) == patches.end()) {
+                        throw std::runtime_error(
+                            "SIMPLE Error: fixed pressure patch \"" +
+                            name +
+                            "\" does not exist."
+                        );
+                    }
+                }
+            }
+
+            // 设置压力修正值场边界条件
+            for (const auto& [name, patch] : patches) {
+                if (patch.getType() == BoundaryPatch::BoundaryType::EMPTY) {
+                    continue;
+                }
+                if (patchNames.find(name) == patchNames.end()) {
+                    pCorr_.setBoundaryCondition(name, 0, 1, 0); // 设置为0梯度边界条件
+                    continue;
+                }
+                else {
+                    pCorr_.setBoundaryCondition(name, 1, 0, 0); // 设置为固定压力边界条件(修正值为0);
+                }
+                const ULL startFace = patch.getStartFace();
+                const ULL nFace = patch.getNFace();
+                for (ULL faceId = startFace;
+                     faceId < startFace + nFace;
+                     ++faceId) {
+                    fixedPressureFace_[faceId] = true;
+                }
+            }
+        }
+        inline void SIMPLE::correctFaceVelocity() {
+            const std::vector<Face>& faces = mesh_->getFaces();
+            const std::vector<Cell>& cells = mesh_->getCells();
+            const CellField<Scalar>& pCorrCell = pCorr_.getCellField();
+            const CellField<Vector<Scalar>>& gradPCorrCell = pCorr_.getCellGradientField();
+            const CellField<Scalar>& rAUCell = rAU_.getCellField();
+
+            for (ULL faceId : mesh_->getInternalFaceIndexes())
+            {
+                const Face& face = faces[faceId];
+                const ULL owner = face.getOwnerIndex();
+                const LL neighbor = face.getNeighborIndex();
+
+                const Vector<Scalar> Sf = face.getArea() * face.getNormal();
+                const Scalar magSf2 = Sf.magnitudeSquared();
+                const Vector<Scalar> dPN =
+                    cells[static_cast<ULL>(neighbor)].getCenter() -
+                    cells[owner].getCenter();
+                const Scalar dPNMag = dPN.magnitude();
+                const Vector<Scalar> ePN = dPN / dPNMag;
+                const Scalar denom = std::abs(face.getNormal() & ePN);
+                const Scalar EfMag = face.getArea() / denom;
+                const Scalar alpha = interpolationAlphaInternal(faceId);
+
+                const Scalar Df =
+                    util::interpolate(
+                        rAUCell[owner],
+                        rAUCell[static_cast<ULL>(neighbor)],
+                        interpolation::Scheme::LINEAR,
+                        alpha
+                    );
+
+                Scalar volumeFluxCorrection =
+                    Df * EfMag / dPNMag *
+                    (
+                        pCorrCell[owner] -
+                        pCorrCell[static_cast<ULL>(neighbor)]
+                        );
+
+                Uf_[faceId] +=
+                    (volumeFluxCorrection / magSf2) * Sf;
+            }
+        }
+        inline void SIMPLE::correctPressure() {
+            std::vector<Scalar>& pData = p_.getCellField().getData();
+            std::vector<Scalar>& pOldData = p_.getCellField_0().getData();
+            const std::vector<Scalar>& pCorrData = pCorr_.getCellField().getData();
+            for (ULL cellId = 0; cellId < mesh_->getCellNumber(); ++cellId) {
+                pData[cellId] += options_.alphaP * pCorrData[cellId];
+            }
+            pOldData = pData;   // 同步CellField_0
+            p_.cellToFace();
+        }
+        inline void SIMPLE::correctVelocity() {
+            std::vector<Vector<Scalar>>& UData = U_.getCellField().getData();
+            std::vector<Vector<Scalar>>& UOldData = U_.getCellField_0().getData();
+            const std::vector<Scalar>& rAUData = rAU_.getCellField().getData();
+            const std::vector<Vector<Scalar>>& gardPCorrData = pCorr_.getCellGradientField().getData();
+            for (ULL cellId = 0; cellId < mesh_->getCellNumber(); ++cellId) {
+                UData[cellId] -= rAUData[cellId] * gardPCorrData[cellId];
+            }
+            UOldData = UData;   // 同步CellField_0
+            U_.cellToFace();
+        }
+        inline Scalar SIMPLE::computeContinuityResidual() const {
+            static std::vector<Scalar> cellMassResidual(mesh_->getCellNumber());
+            std::fill(cellMassResidual.begin(), cellMassResidual.end(), Scalar());
+            const std::vector<Cell>& cells = mesh_->getCells();
+            const std::vector<Face>& faces = mesh_->getFaces();
+
+            Scalar totalAbsFlux = 0.0;
+            // const std::vector<Vector<Scalar>>& UfData = U_.getFaceField().getData();
+            const std::vector<Vector<Scalar>>& UfData = Uf_.getData();
+
+            // 内部面遍历
+            for (const ULL faceId : mesh_->getInternalFaceIndexes()) {
+                const Face& face = faces[faceId];
+                const ULL owner = face.getOwnerIndex();
+                const LL neighbor = face.getNeighborIndex();
+                const Scalar fluxValue = UfData[faceId] & face.getNormal() * face.getArea();
 
                 cellMassResidual[owner] += fluxValue;
-
-                if (neighbor >= 0) {
-                    cellMassResidual[static_cast<ULL>(neighbor)] -= fluxValue;
-                }
-
+                cellMassResidual[neighbor] -= fluxValue;
                 totalAbsFlux += std::abs(fluxValue);
             }
+            // 边界面
+            for (const ULL faceId : mesh_->getBoundaryFaceIndexes()) {
+                const Face& face = faces[faceId];
+                const ULL owner = face.getOwnerIndex();
+                const Scalar fluxValue = UfData[faceId] & face.getNormal() * face.getArea();
 
+                cellMassResidual[owner] += fluxValue;
+                totalAbsFlux += std::abs(fluxValue);
+            }
+            // 找到cellMassResidual里最大值
             Scalar maxResidual = 0.0;
-
-            for (Scalar r : cellMassResidual) {
-                maxResidual = std::max(maxResidual, std::abs(r));
+            for (const Scalar& residual : cellMassResidual) {
+                maxResidual = std::max(maxResidual, std::abs(residual));
             }
 
-            const Scalar fluxScale =
-                totalAbsFlux /
-                std::max<Scalar>(static_cast<Scalar>(mesh_->getCellNumber()), 1.0);
+            const Scalar avgAbsFlux = totalAbsFlux / mesh_->getCellNumber();
 
-            return maxResidual / (fluxScale + SMALL);
+            return maxResidual / (avgAbsFlux + SMALL);
         }
-
-        Scalar computeRelativeChange(
-            const std::vector<Scalar> &current,
-            const std::vector<Scalar> &old
-        ) const {
-            if (current.size() != old.size()) {
-                throw std::runtime_error(
-                    "SIMPLE Error: scalar field size mismatch."
-                );
-            }
-
+        inline Scalar SIMPLE::computeRelativeChange(const std::vector<Scalar>& current, const std::vector<Scalar>& old) const {
             Scalar numerator = 0.0;
             Scalar denominator = 0.0;
 
@@ -1216,104 +832,16 @@ namespace simple {
 
             return std::sqrt(numerator / (denominator + SMALL));
         }
-
-        Scalar computeRelativeChange(
-            const std::vector<Vector<Scalar>> &current,
-            const std::vector<Vector<Scalar>> &old
-        ) const {
-            if (current.size() != old.size()) {
-                throw std::runtime_error(
-                    "SIMPLE Error: vector field size mismatch."
-                );
-            }
-
+        inline Scalar SIMPLE::computeRelativeChange(const std::vector<Vector<Scalar>>& current, const std::vector<Vector<Scalar>>& old) const
+        {
             Scalar numerator = 0.0;
             Scalar denominator = 0.0;
-
             for (ULL i = 0; i < current.size(); ++i) {
                 numerator += (current[i] - old[i]).magnitudeSquared();
                 denominator += current[i].magnitudeSquared();
             }
-
             return std::sqrt(numerator / (denominator + SMALL));
         }
-
-        bool isEmptyFace(ULL faceId) const {
-            if (mesh_->getDimension() != Mesh::Dimension::TWO_D) {
-                return false;
-            }
-
-            const auto &emptyPair = mesh_->getEmptyFaceIndexesPair();
-
-            return faceId >= emptyPair.first &&
-                faceId < emptyPair.second;
-        }
-
-    private:
-        static constexpr Scalar SMALL = 1e-30;
-
-    private:
-        Mesh *mesh_;
-
-        Field<Vector<Scalar>> &U_;
-        Field<Scalar> &p_;
-
-        FaceField<Scalar> &rho_;
-        FaceField<Scalar> &gamma_;
-
-        Options options_;
-
-        FaceField<Scalar> phi_;
-        Field<Scalar> pCorr_;
-
-        SparseMatrix<Vector<Scalar>> momentumEqn_;
-        SparseMatrix<Scalar> pressureCorrEqn_;
-
-        // 实际保存 D_P = V_P / a_P。
-        std::vector<Scalar> rAU_;
-
-        std::vector<bool> fixedPressureFace_;
-    };
-
-    inline SIMPLE::SIMPLE(
-        Field<Vector<Scalar>> &U,
-        Field<Scalar> &p,
-        FaceField<Scalar> &rho,
-        FaceField<Scalar> &gamma
-    )
-        : SIMPLE(U, p, rho, gamma, Options{}) {}
-
-    inline SIMPLE::SIMPLE(
-        Field<Vector<Scalar>> &U,
-        Field<Scalar> &p,
-        FaceField<Scalar> &rho,
-        FaceField<Scalar> &gamma,
-        const Options &options
-    )
-        : mesh_(U.getMesh())
-        , U_(U)
-        , p_(p)
-        , rho_(rho)
-        , gamma_(gamma)
-        , options_(options)
-        , phi_("phi", mesh_, Scalar{})
-        , pCorr_("pCorr", mesh_)
-        , momentumEqn_(mesh_)
-        , pressureCorrEqn_(mesh_) {
-        validateInput();
-        validateOptions();
-
-        const ULL cellNumber = mesh_->getCellNumber();
-        const ULL faceNumber = mesh_->getFaceNumber();
-
-        rAU_.assign(cellNumber, Scalar{});
-        fixedPressureFace_.assign(faceNumber, false);
-
-        pCorr_.initialize();
-
-        initializeFixedPressureFaces();
     }
-    
-} // namespace simple
-
-#endif // SIMPLE_ALGORITHM_SIMPLE_HPP_
+}
+#endif // SIMPLE1_H_

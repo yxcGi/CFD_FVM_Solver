@@ -41,25 +41,17 @@ int main()
 
         SparseMatrix<Scalar> A_b(&mesh);
 
-        for (int i = 0; i < 1000; ++i) {
-            fvm::Div(A_b, rho, phi, U, fvm::DivType::FUD);
+        fvm::Div(A_b, rho, phi, U, fvm::DivType::FUD);
 
-            Solver<Scalar> solver(A_b, Solver<Scalar>::Method::Jacobi, 100000);
-            solver.init(phi.getCellField().getData());
-            solver.setTolerance(1e-15);
-            solver.relax(0.5);
+        Solver<Scalar> solver(A_b, Solver<Scalar>::Method::Jacobi, 100000);
+        solver.init(phi.getCellField().getData());
+        solver.setTolerance(1e-15);
+        solver.relax(0.5);
 
-            const Scalar residual = solver.Error();
-            std::cout << "residual: " << residual << " " << i << std::endl;
 
-            if (residual < 1e-6) {
-                break;
-            }
 
-            solver.solve();
-            phi.cellToFace();
-            A_b.clear();
-        }
+        solver.solve();
+        phi.cellToFace();
 
         phi.writeToFile("phi.dat");
     }

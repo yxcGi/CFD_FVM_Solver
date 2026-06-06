@@ -29,23 +29,14 @@ int main()
 
         SparseMatrix<Scalar> A_b(&mesh);
 
-        for (int i = 0; i < 1000; ++i) {
-            fvm::Laplacian(A_b, gamma, phi);
+        fvm::Laplacian(A_b, gamma, phi);
 
-            Solver<Scalar> solver(A_b, Solver<Scalar>::Method::Jacobi, 100000);
-            solver.init(phi.getCellField_0().getData());
+        Solver<Scalar> solver(A_b, Solver<Scalar>::Method::Jacobi, 100000);
+        solver.init(phi.getCellField_0().getData());
 
-            const Scalar residual = solver.Error();
-            std::cout << "residual: " << residual << " " << i << std::endl;
 
-            if (residual < 1e-6) {
-                break;
-            }
-
-            solver.solve();
-            phi.cellToFace();
-            A_b.clear();
-        }
+        solver.solve();
+        phi.cellToFace();
 
         phi.writeToFile("phi.dat");
     }

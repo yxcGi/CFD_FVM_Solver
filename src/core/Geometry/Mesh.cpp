@@ -379,7 +379,7 @@ void Mesh::readBoundaryPatch(const std::string& boundaryPath)
     // 通过是否有empty来判断网格的维度，存在empty则为二维网格
     for (const auto& [name, bP] : boundaryPatches_)
     {
-        if (bP.getType() == BoundaryPatch::BoundaryType::EMPTY)
+        if (bP.getType() == BoundaryPatch::BoundaryType::EMPTY || bP.getName() == "frontAndBack")
         {
             // 设置为二维
             dimension_ = Mesh::Dimension::TWO_D;

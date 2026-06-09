@@ -16,20 +16,7 @@ int main()
         Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
 
         Field<Scalar> phi("T", &mesh);
-        CellField<Scalar> Q("Q", &mesh);
 
-        Q.setValue(
-            [](Scalar x, Scalar y, Scalar) {
-                const Scalar dx = x - 0.05;
-                const Scalar dy = y - 0.05;
-
-                if (dx * dx + dy * dy < 0.0001) {
-                    return 100000;
-                }
-
-                return 0;
-            }
-        );
 
         phi.setValue(500);
 
@@ -43,25 +30,20 @@ int main()
         gamma.setValue(20);
 
         SparseMatrix<Scalar> A_b(&mesh);
+        CellField<Scalar> Q("Q", &mesh);
+        Q.setValue(10000);
+        fvm::Laplacian(A_b, gamma, phi);
+        fvm::Source(A_b, Q);
 
-        for (int i = 0; i < 1000; ++i) {
-            fvm::Laplacian(A_b, gamma, phi);
-            fvm::Source(A_b, Q);
+        Solver<Scalar> solver(A_b, Solver<Scalar>::Method::Jacobi, 100000);
+        solver.init(phi.getCellField_0().getData());
 
-            Solver<Scalar> solver(A_b, Solver<Scalar>::Method::Jacobi, 100000);
-            solver.init(phi.getCellField_0().getData());
+        const Scalar residual = solver.Error();
 
-            const Scalar residual = solver.Error();
-            std::cout << "residual: " << residual << " " << i << std::endl;
 
-            if (residual < 1e-6) {
-                break;
-            }
-
-            solver.solve();
-            phi.cellToFace();
-            A_b.clear();
-        }
+        solver.solve();
+        phi.cellToFace();
+        A_b.clear();
 
         phi.writeToFile("phi.dat");
     }

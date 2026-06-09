@@ -624,7 +624,7 @@ namespace algorithm {
             U_.cellToFace();
         }
         inline void SIMPLE::solverPressureCorrEqn() {
-            pCorr_.setValue(options_.pressureReferenceValue);
+            pCorr_.setValue(Scalar());
             // 计算负的速度散度
             CellField<Scalar> negDivUCell("-divU", mesh_, Scalar());
             std::vector<Scalar>& negDivUCellData = negDivUCell.getData();
@@ -647,9 +647,9 @@ namespace algorithm {
                     const ULL refCell = options_.pressureReferenceCell;
                     const Scalar penalty = options_.pressureReferencePenalty;
                     pressureCorrEqn_(refCell, refCell) += penalty;
-                    pressureCorrEqn_.addB(refCell, penalty * options_.pressureReferenceValue);
+                    pressureCorrEqn_.addB(refCell, 0.0);
                 }
-   
+
                 pressureCorrSolver.init(pCorr_.getCellField().getData());
                 pressureCorrSolver.setTolerance(options_.pressureTolerance);
                 if (options_.useParallel) {
@@ -737,6 +737,8 @@ namespace algorithm {
                 const Vector<Scalar> ePN = dPN / dPNMag;
                 const Scalar denom = std::abs(face.getNormal() & ePN);
                 const Scalar EfMag = face.getArea() / denom;
+                const Vector<Scalar> Ef = EfMag * ePN;
+                const Vector<Scalar> Tf = Sf - Ef;
                 const Scalar alpha = interpolationAlphaInternal(faceId);
 
                 const Scalar Df =
@@ -746,13 +748,22 @@ namespace algorithm {
                         interpolation::Scheme::LINEAR,
                         alpha
                     );
+                const Vector<Scalar> gradPCorrF =
+                    util::interpolate(
+                        gradPCorrCell[owner],
+                        gradPCorrCell[neighbor],
+                        interpolation::Scheme::LINEAR,
+                        alpha
+                    );
+                /*
+                * (grad p')_f · Sf =
+                * 正交项 + 非正交修正项
+                */
+                const Scalar gradPCorrFaceDotSf =
+                    (pCorrCell[neighbor] - pCorrCell[owner]) / dPNMag * EfMag
+                    + (gradPCorrF & Tf);
 
-                Scalar volumeFluxCorrection =
-                    Df * EfMag / dPNMag *
-                    (
-                        pCorrCell[owner] -
-                        pCorrCell[static_cast<ULL>(neighbor)]
-                        );
+                const Scalar volumeFluxCorrection = -Df * gradPCorrFaceDotSf;
 
                 Uf_[faceId] +=
                     (volumeFluxCorrection / magSf2) * Sf;

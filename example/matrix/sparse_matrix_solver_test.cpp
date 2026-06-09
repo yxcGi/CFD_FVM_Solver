@@ -6,6 +6,7 @@
 #include "SparseMatrix.hpp"
 
 using Scalar = double;
+using namespace std;;
 
 int main()
 {
@@ -15,7 +16,10 @@ int main()
             {1, 2}
         };
 
-        std::vector<Scalar> b{3, 5};
+        std::vector<Scalar> b{ 3, 5 };
+        SparseMatrix<Scalar> A1(vector<vector<Scalar>>{{1, 1}, { 1, 1 }});
+        A1.compress();
+
 
         SparseMatrix<Scalar> A_sparse(A);
         A_sparse.setB(b);

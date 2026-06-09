@@ -3,13 +3,11 @@
 
 
 
-namespace fvm
-{
+namespace fvm {
     /**
      * @brief 对流项迎风格式
      */
-    enum class DivType
-    {
+    enum class DivType {
         FUD,    // 一阶迎风
         SUD,    // 二阶迎风
         CD,     // 中心差分

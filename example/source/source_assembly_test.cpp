@@ -5,29 +5,29 @@
 #include "Source.hpp"
 #include "SparseMatrix.hpp"
 
-using Scalar = double;
 
 int main()
 {
+    using Scalar = double;
     // 源项矩阵装配测试
     Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
 
-    Field<Scalar> phi("T", &mesh);
+    Field<Scalar> T("T", &mesh);
     Field<Scalar> p("p", &mesh);
 
-    phi.setValue(500);
+    T.setValue(500);
     p.setValue(0);
 
-    phi.setBoundaryCondition("movingWall", 0, 1, 0);
-    phi.setBoundaryCondition("leftWalls", 1, 0, 100);
-    phi.setBoundaryCondition("bottomWalls", 1, 0, 0);
-    phi.setBoundaryCondition("rightWalls", 0, 1, 0);
-    phi.cellToFace();
+    T.setBoundaryCondition("movingWall", 0, 1, 0);
+    T.setBoundaryCondition("leftWalls", 1, 0, 100);
+    T.setBoundaryCondition("bottomWalls", 1, 0, 0);
+    T.setBoundaryCondition("rightWalls", 0, 1, 0);
+    T.cellToFace();
 
     FaceField<Scalar> gamma("gamma", &mesh);
     gamma.setValue(20);
-
     SparseMatrix<Scalar> A_b(&mesh);
+    fvm::Laplacian(A_b, gamma, T);
 
     fvm::Source(A_b, p.getCellField());
 

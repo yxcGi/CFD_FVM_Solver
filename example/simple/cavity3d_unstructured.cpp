@@ -31,7 +31,7 @@ int main()
     nu.setValue(0.01);
 
     algorithm::simple::SIMPLE::Options options;
-    options.maxOuterIterations = 5000;
+    options.maxOuterIterations = 50000;
     options.alphaU = 0.7;
     options.alphaP = 0.3;
     options.convergenceTolerance = 1e-8;

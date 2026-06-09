@@ -7,10 +7,9 @@
 #include "Solver.hpp"
 #include "SparseMatrix.hpp"
 
-using Scalar = double;
 
-int main()
-{
+int main() {
+    using Scalar = double;
     Mesh mesh("tempFile/OpenFOAM_tutorials/cavity/constant/polyMesh");
 
     Field<Scalar> phi("T", &mesh);

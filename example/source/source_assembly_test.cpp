@@ -4,6 +4,7 @@
 #include "Geometry/Mesh.h"
 #include "Source.hpp"
 #include "SparseMatrix.hpp"
+#include "Laplacian.hpp"
 
 
 int main()

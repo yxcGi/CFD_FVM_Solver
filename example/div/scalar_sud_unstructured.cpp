@@ -26,7 +26,7 @@ int main() {
     SparseMatrix<Scalar> A(&mesh);
     for (int i = 0; i < 100; ++i)
     {
-        fvm::Div(A, rho, T, Uf, fvm::DivType::MINMOD);
+        fvm::Div(A, rho, T, Uf, fvm::DivType::MUSCL);
 
         Solver<Scalar> solver(A, Solver<Scalar>::Method::Jacobi, 100000);
         solver.init(T.getCellField().getData());

@@ -36,7 +36,7 @@ int main()
     options.alphaP = 0.3;
     options.convergenceTolerance = 1e-8;
     options.nNonOrthogonalCorrectors = 2;
-    options.divScheme = fvm::DivType::SUD;
+    options.divScheme = fvm::DivType::MUSCL;
     options.useParallel = true;
 
     algorithm::simple::SIMPLE solver(U, p, rho, nu, options);

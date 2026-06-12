@@ -718,9 +718,16 @@ namespace algorithm {
         inline void SIMPLE::correctFaceVelocity() {
             const std::vector<Face>& faces = mesh_->getFaces();
             const std::vector<Cell>& cells = mesh_->getCells();
+
             const CellField<Scalar>& pCorrCell = pCorr_.getCellField();
-            const CellField<Vector<Scalar>>& gradPCorrCell = pCorr_.getCellGradientField();
+            const FaceField<Scalar>& pCorrFace = pCorr_.getFaceField();
+
+            const CellField<Vector<Scalar>>& gradPCorrCell =
+                pCorr_.getCellGradientField();
+
             const CellField<Scalar>& rAUCell = rAU_.getCellField();
+            const FaceField<Scalar>& rAUFace = rAU_.getFaceField();
+            
 
             for (ULL faceId : mesh_->getInternalFaceIndexes())
             {
@@ -767,6 +774,81 @@ namespace algorithm {
 
                 Uf_[faceId] +=
                     (volumeFluxCorrection / magSf2) * Sf;
+            }
+
+            /*
+            * 2. 固定压力边界面的修正
+            *
+            * 对 pressure outlet:
+            *
+            *     p'_f = 0
+            *
+            * 但 p'_P 不一定为 0，因此边界面通量需要修正。
+            */
+            for (ULL faceId : mesh_->getBoundaryFaceIndexes())
+            {
+                if (!fixedPressureFace_[faceId]) {
+                    continue;
+                }
+
+                const Face& face = faces[faceId];
+                const ULL owner = face.getOwnerIndex();
+
+                const Vector<Scalar> Sf = face.getArea() * face.getNormal();
+                const Scalar magSf2 = Sf.magnitudeSquared();
+
+                const Vector<Scalar> dPf =
+                    face.getCenter() - cells[owner].getCenter();
+
+                const Scalar dPfMag = dPf.magnitude();
+                if (dPfMag < SMALL || magSf2 < SMALL) {
+                    throw std::runtime_error(
+                        "SIMPLE::correctFaceVelocity: bad boundary face geometry."
+                    );
+                }
+
+                const Vector<Scalar> ePf = dPf / dPfMag;
+
+                /*
+                 * 边界面法向应当从 owner cell 指向边界外侧。
+                 * 如果这里 denom <= 0，说明 face normal 方向可能有问题。
+                 */
+                const Scalar denom = face.getNormal() & ePf;
+                if (denom <= SMALL) {
+                    throw std::runtime_error(
+                        "SIMPLE::correctFaceVelocity: boundary face normal direction is inconsistent."
+                    );
+                }
+
+                const Scalar EfMag = face.getArea() / denom;
+                const Vector<Scalar> Ef = EfMag * ePf;
+                const Vector<Scalar> Tf = Sf - Ef;
+
+                const Scalar pCorrP = pCorrCell[owner];
+
+                /*
+                 * 对 fixedPressure patch，pCorrFace[faceId] 应该是 0。
+                 */
+                const Scalar pCorrF = pCorrFace[faceId];
+
+                /*
+                 * 边界面 D_f。
+                 * 如果 rAU 的边界是 zeroGradient，那么 rAUFace[faceId] 等价于 owner 值。
+                 */
+                const Scalar Df = rAUFace[faceId];
+
+                /*
+                 * 边界面没有 neighbor，所以非正交修正项先用 owner 梯度近似。
+                 */
+                const Vector<Scalar>& gradPCorrF = gradPCorrCell[owner];
+
+                const Scalar gradPCorrFaceDotSf =
+                    (pCorrF - pCorrP) / dPfMag * EfMag
+                    + (gradPCorrF & Tf);
+
+                const Scalar volumeFluxCorrection = -Df * gradPCorrFaceDotSf;
+
+                Uf_[faceId] += (volumeFluxCorrection / magSf2) * Sf;
             }
         }
         inline void SIMPLE::correctPressure() {

@@ -423,10 +423,10 @@ enum class DivType
 | 格式 | 状态 | 说明 |
 |---|---|---|
 | `FUD` | 已实现 | 一阶迎风格式 |
-| `SUD` | 已实现 | 二阶迎风格式，使用延迟修正 |
-| `CD` | 已实现基础形式 | 中心差分格式 |
-| `MINMOD` | 预留 | 尚未完整实现 |
-| `MUSCL` | 预留 | 尚未完整实现 |
+| `SUD` | 已实现 | 基于梯度重构的二阶迎风格式，使用延迟修正 |
+| `CD` | 已实现 | 有界中心格式，采用 FUD 隐式矩阵 + 延迟修正 |
+| `MINMOD` | 已实现 | TVD 限制格式 |
+| `MUSCL` | 已实现 | MUSCL / van Leer 型限制格式 |
 
 典型用法：
 
@@ -663,7 +663,7 @@ options.alphaU = 0.7;
 options.alphaP = 0.3;
 
 options.nNonOrthogonalCorrectors = 2;
-options.divScheme = fvm::DivType::SUD;
+options.divScheme = fvm::DivType::MUSCL;
 
 options.useRhieChow = true;
 options.useParallel = true;
@@ -746,7 +746,7 @@ int main()
     options.alphaP = 0.3;
     options.convergenceTolerance = 1e-8;
     options.nNonOrthogonalCorrectors = 2;
-    options.divScheme = fvm::DivType::SUD;
+    options.divScheme = fvm::DivType::MUSCL;
     options.useParallel = true;
 
     algorithm::simple::SIMPLE solver(U, p, rho, nu, options);
@@ -1072,7 +1072,7 @@ options.alphaU = 0.7;
 options.alphaP = 0.3;
 options.convergenceTolerance = 1e-8;
 options.nNonOrthogonalCorrectors = 2;
-options.divScheme = fvm::DivType::SUD;
+options.divScheme = fvm::DivType::MUSCL;
 options.useParallel = true;
 
 algorithm::simple::SIMPLE solver(U, p, rho, nu, options);
@@ -1260,9 +1260,9 @@ options.useRhieChow = true;
 
    `GaussSeidel` 和 `AMG` 在枚举中已有预留，但尚未完整实现。
 
-3. **高阶对流格式仍需完善**
+3. **高阶对流格式仍需继续验证**
 
-   `MINMOD` 和 `MUSCL` 已预留枚举，但当前尚未完整实现。
+   `MINMOD` 和 `MUSCL` 已实现为 TVD / MUSCL 限制格式，后续仍需在更多标准算例和复杂非结构网格上验证鲁棒性。
 
 4. **湍流模型尚未实现**
 
@@ -1285,7 +1285,7 @@ options.useRhieChow = true;
 - 完善 Gauss-Seidel / SOR 求解器；
 - 引入 AMG 或其他更高效线性求解器；
 - 增加瞬态项离散；
-- 完善 `MINMOD / MUSCL` 等高分辨率对流格式；
+- 增加更多高阶对流格式验证算例；
 - 完善压力出口、速度入口、壁面等边界条件封装；
 - 增加湍流模型；
 - 增加更多标准验证算例；

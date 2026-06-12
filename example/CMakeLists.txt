@@ -31,7 +31,7 @@ foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
 
     target_compile_features(${EXAMPLE_TARGET_NAME}
         PRIVATE
-        cxx_std_17
+        cxx_std_20
     )
 
     set_target_properties(${EXAMPLE_TARGET_NAME}

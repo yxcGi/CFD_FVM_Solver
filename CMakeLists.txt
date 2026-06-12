@@ -3,10 +3,10 @@ cmake_minimum_required(VERSION 3.15)
 get_filename_component(PRJ_NAME ${CMAKE_SOURCE_DIR} NAME)
 
 project(${PRJ_NAME}
-    VERSION 1.0.0
-    DESCRIPTION "CFD solver based on the finite volume method"
+    VERSION 0.1.0
+    DESCRIPTION "A lightweight finite volume method CFD solver"
     LANGUAGES CXX
-    HOMEPAGE_URL "https://github.com/yxcGi/CFD_assignment.git"
+    HOMEPAGE_URL "https://github.com/yxcGi/CFD_FVM_Solver"
 )
 
 set(CMAKE_CXX_STANDARD 20)

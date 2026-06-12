@@ -16,6 +16,75 @@
 
 ---
 
+# 算例展示
+
+以下算例覆盖二维方腔驱动、二维台阶流与三维方腔驱动等典型不可压缩流验证场景。
+
+## 二维方腔驱动
+
+方腔驱动算例同时展示了三角形非结构化网格与正方形结构化网格下的流场结果。
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="docs/example_image/cavity2d_triangle_unstructured_mesh.png" width="280"><br>
+      三角形非结构化网格
+    </td>
+    <td align="center">
+      <img src="docs/example_image/cavity2d_square_structured_mesh_20x20.png" width="280"><br>
+      正方形结构化网格 20×20
+    </td>
+  </tr>
+</table>
+
+| Re | 正方形网格 | 三角形网格 |
+| --- | --- | --- |
+| 400 | <img src="docs/example_image/cavity2d_square_re400.png" width="220"> | <img src="docs/example_image/cavity2d_triangle_re400.png" width="220"> |
+| 1000 | <img src="docs/example_image/cavity2d_square_re1000.png" width="220"> | <img src="docs/example_image/cavity2d_triangle_re1000.png" width="220"> |
+| 2000 | <img src="docs/example_image/cavity2d_square_re2000.png" width="220"> | <img src="docs/example_image/cavity2d_triangle_re2000.png" width="220"> |
+| 5000 | <img src="docs/example_image/cavity2d_square_re5000.png" width="220"> | <img src="docs/example_image/cavity2d_triangle_re5000.png" width="220"> |
+
+## 二维台阶流
+
+二维台阶流算例网格数为 12225，结果展示了不同 Reynolds 数下的流线与速度云图。
+
+<p align="center">
+  <img src="docs/example_image/backward_step_mesh_12225.png" width="720"><br>
+  台阶流计算网格
+</p>
+
+| Re | 流线 | 速度云图 |
+| --- | --- | --- |
+| 50 | <img src="docs/example_image/backward_step_streamline_re50.png" width="320"> | <img src="docs/example_image/backward_step_velocity_re50.png" width="320"> |
+| 100 | <img src="docs/example_image/backward_step_streamline_re100.png" width="320"> | <img src="docs/example_image/backward_step_velocity_re100.png" width="320"> |
+| 150 | <img src="docs/example_image/backward_step_streamline_re150.png" width="320"> | <img src="docs/example_image/backward_step_velocity_re150.png" width="320"> |
+| 200 | <img src="docs/example_image/backward_step_streamline_re200.png" width="320"> | <img src="docs/example_image/backward_step_velocity_re200.png" width="320"> |
+
+## 三维方腔驱动
+
+三维方腔驱动算例网格数为 10250，边长 `L = 1`，下表展示了不同截面和 Reynolds 数下的速度场结构。
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="docs/example_image/cavity3d_velocity_direction_overview.png" width="420"><br>
+      三维方腔速度方向示意
+    </td>
+    <td align="center">
+      <img src="docs/example_image/cavity3d_velocity_direction_axes.png" width="320"><br>
+      坐标轴与速度方向
+    </td>
+  </tr>
+</table>
+
+| 截面 | Re = 400 | Re = 1000 | Re = 1600 |
+| --- | --- | --- | --- |
+| z = 0.5 | <img src="docs/example_image/cavity3d_z05_re400.png" width="180"> | <img src="docs/example_image/cavity3d_z05_re1000.png" width="180"> | <img src="docs/example_image/cavity3d_z05_re1600.png" width="180"> |
+| x = 0.5 | <img src="docs/example_image/cavity3d_x05_re400.png" width="180"> | <img src="docs/example_image/cavity3d_x05_re1000.png" width="180"> | <img src="docs/example_image/cavity3d_x05_re1600.png" width="180"> |
+| y = 0.5 | <img src="docs/example_image/cavity3d_y05_re400.png" width="180"> | <img src="docs/example_image/cavity3d_y05_re1000.png" width="180"> | <img src="docs/example_image/cavity3d_y05_re1600.png" width="180"> |
+
+---
+
 ## 1. 当前功能
 
 ### 1.1 网格与几何模块

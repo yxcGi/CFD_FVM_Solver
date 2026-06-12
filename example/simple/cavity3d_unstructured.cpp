@@ -18,7 +18,9 @@ int main()
     U.setValue(Vector<Scalar>(0, 0, 0));
     p.setValue(0.0);
 
-    U.setBoundaryCondition("movingWall", 1, 0, Vector<Scalar>(5, 0, 0));
+    // U.setBoundaryCondition("movingWall", 1, 0, Vector<Scalar>(4, 0, 0)); // Re = 400
+    // U.setBoundaryCondition("movingWall", 1, 0, Vector<Scalar>(10, 0, 0)); // Re = 1000
+    U.setBoundaryCondition("movingWall", 1, 0, Vector<Scalar>(16, 0, 0)); // Re = 1600
     U.setBoundaryCondition("fixedWalls", 1, 0, Vector<Scalar>(0, 0, 0));
 
     p.setBoundaryCondition("movingWall", 0, 1, 0.0);
@@ -31,19 +33,19 @@ int main()
     nu.setValue(0.01);
 
     algorithm::simple::SIMPLE::Options options;
-    options.maxOuterIterations = 50000;
+    options.maxOuterIterations = 15000;
     options.alphaU = 0.7;
     options.alphaP = 0.3;
     options.convergenceTolerance = 1e-8;
-    options.nNonOrthogonalCorrectors = 2;
-    options.divScheme = fvm::DivType::SUD;
+    options.nNonOrthogonalCorrectors = 3;
+    options.divScheme = fvm::DivType::MUSCL;
     options.useParallel = true;
 
     algorithm::simple::SIMPLE solver(U, p, rho, nu, options);
     solver.solve();
 
-    U.writeToFile("U_SIMPLE.dat");
-    p.writeToFile("p_SIMPLE.dat");
+    U.writeToFile("U_cavity3d_unstructured.dat");
+    p.writeToFile("p_cavity3d_unstructured.dat");
 
     return 0;
 }

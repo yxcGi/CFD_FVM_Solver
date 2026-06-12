@@ -21,7 +21,14 @@ int main()
     U.setValue(Vector<Scalar>(0, 0, 0));
     p.setValue(0.0);
 
-    U.setBoundaryCondition("inlet", 1, 0, Vector<Scalar>(10, 0, 0));
+    U.setBoundaryCondition("inlet", 1, 0, Vector<Scalar>(20, 0, 0));  // Re = 50
+    // U.setBoundaryCondition("inlet", 1, 0, Vector<Scalar>(40, 0, 0));  // Re = 100
+    // U.setBoundaryCondition("inlet", 1, 0, Vector<Scalar>(60, 0, 0));  // Re = 150
+    // U.setBoundaryCondition("inlet", 1, 0, Vector<Scalar>(80, 0, 0));  // Re = 200
+    // U.setBoundaryCondition("inlet", 1, 0, Vector<Scalar>(100, 0, 0));  // Re = 250
+    // U.setBoundaryCondition("inlet", 1, 0, Vector<Scalar>(120, 0, 0));  // Re = 300
+    // U.setBoundaryCondition("inlet", 1, 0, Vector<Scalar>(160, 0, 0));  // Re = 400
+    // U.setBoundaryCondition("inlet", 1, 0, Vector<Scalar>(320, 0, 0)); // Re = 800
     U.setBoundaryCondition("outlet", 0, 1, Vector<Scalar>(0, 0, 0));
     U.setBoundaryCondition("upperWall", 1, 0, Vector<Scalar>(0, 0, 0));
     U.setBoundaryCondition("lowerWall", 1, 0, Vector<Scalar>(0, 0, 0));
@@ -38,12 +45,12 @@ int main()
     nu.setValue(0.01);
 
     algorithm::simple::SIMPLE::Options options;
-    options.maxOuterIterations = 500;
+    options.maxOuterIterations = 10000;
     options.alphaU = 0.7;
     options.alphaP = 0.3;
     options.convergenceTolerance = 1e-8;
-    options.nNonOrthogonalCorrectors = 2;
-    options.divScheme = fvm::DivType::SUD;
+    options.nNonOrthogonalCorrectors = 3;
+    options.divScheme = fvm::DivType::MUSCL;
     options.fixedPressurePatches = {"outlet"};
     options.useParallel = true;
 
@@ -56,8 +63,8 @@ int main()
         << "s"
         << std::endl;
 
-    U.writeToFile("U_SIMPLE.dat");
-    p.writeToFile("p_SIMPLE.dat");
+    U.writeToFile("U_pitz_daily_steady.dat");
+    p.writeToFile("p_pitz_daily_steady.dat");
 
     return 0;
 }
